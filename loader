@@ -2,10 +2,9 @@
 
 repeat task["wait"]() until game:IsLoaded()
 
-
-if game["PlaceId"] ~= 2788229376 then 
-    return game:GetService("Players")["LocalPlayer"]:Kick("juju dont supporting this place.")
-end
+--if game["PlaceId"] ~= 2788229376 then 
+--    return game:GetService("Players")["LocalPlayer"]:Kick("juju dont supporting this place.")
+--end
 
 if (identifyexecutor() == "AWP" or identifyexecutor() == "Nihon") then
     cleardrawcache()
@@ -8764,7 +8763,7 @@ do
             setthreadidentity(4)
             local method = getnamecallmethod()
             
-            -- Блокировка локального кика (замена hookfunction, которая крашила)
+
             if method == "Kick" and self == local_player then
                 return
             end
