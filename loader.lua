@@ -1,16 +1,12 @@
-
+--> dont make key sys pls
 
 repeat task["wait"]() until game:IsLoaded()
-
---if game["PlaceId"] ~= 2788229376 then 
---    return game:GetService("Players")["LocalPlayer"]:Kick("juju dont supporting this place.")
---end
 
 if (identifyexecutor() == "AWP" or identifyexecutor() == "Nihon") then
     cleardrawcache()
 end
 
-
+-- > ( luraph variables )
 
 if not LPH_OBFUSCATED then
     LPH_JIT_MAX = function(...) return ... end
@@ -22,62 +18,122 @@ end
 
 getgenv()["juju"] = {}
 
-
 -- > ( bypass )
 
-if not getgenv().done_juju then
-    getgenv().done_juju = true
+LPH_JIT_MAX(function()
+    if not getgenv().done then
+        local reg = getreg()
+        local connection, signal
+        for _, v in reg do
+            local v_type = typeof(v)
+            if v_type == "RBXScriptConnection" then
+                connection = v
+            elseif v_type == "RBXScriptSignal" then
+                signal = v
+            end
+            if connection and signal then
+                break
+            end
+        end
+        local gc = getgc(true)
 
-    local Players = cloneref(game:GetService("Players"))
-    local LocalPlayer = Players.LocalPlayer
+        local connection_count = 0
+        local neutralize = {}
 
-    local flags_to_disable = {
-        "teleportdetect", "checker_1", "checker", "gui_check",
-        "onemoretime", "checkingspeed", "banremote", "permaidban",
-        "kickremote", "br_kickpc", "br_kickmobile"
-    }
+        for i, v in reg do
+            if typeof(v) == "function" and islclosure(v) then
+                local ok, info = pcall(getinfo, v)
 
-    task.spawn(function()
-        while task.wait(5) do
-            for _, v in getgc(true) do
-                if type(v) == "table" then
-                    local k, val = next(v)
-                    while k ~= nil do
-                        if type(k) == "string" and type(val) == "boolean" and val then
-                            local lk = string.lower(k)
-                            for _, f in ipairs(flags_to_disable) do
-                                if string.find(lk, f) then
-                                    rawset(v, k, false)
-                                    break
-                                end
-                            end
+                if ok and info and type(info.source) == "string" then
+                    local _, count = string.gsub(info.source, "%.", "")
+
+                    if count == 1 and not string.find(info.source, "Replicated") then
+                        local ok2, upvalues = pcall(getupvalues, v)
+
+                        if ok2 and upvalues[2] ~= 26 then
+                            connection_count+=1
+                            neutralize[i] = true
                         end
-                        k, val = next(v, k)
                     end
                 end
             end
         end
-    end)
 
-    print("test")
-end
+        for i in neutralize do
+            reg[i] = function() end
+        end
+
+        --[[if connection_count < 4 then
+            cloneref(game:GetService("Players"))["LocalPlayer"]:Kick("[juju]\nda hood has updated, please wait for juju to update.")
+            task["wait"](9e9) -- << idk if this will yield in luraph ?
+            return
+        end]]
+
+        local function safe_hook_function(old, replace)
+            local fake_old = clonefunction(old)
+
+            local replacements = {}
+
+            pcall(function()
+                for _, v in gc do
+                    if typeof(v) == "table" and #v < 2500 then
+                        local index = table.find(v, old)
+
+                        if index then
+                            replacements[v] = index
+                        end
+                    end
+                end
+            end)
+
+            pcall(hookfunction, old, replace)
+
+            for _, v in replacements do
+                rawset(_, v, fake_old)
+            end
+
+            return fake_old
+        end
+
+        if connection and signal then
+            old = nil; old = safe_hook_function(signal.__index, LPH_NO_UPVALUES(function(self, index)
+                if (index:find("^[Cc]onnect")) and getinfo(3) then
+                    local source = getinfo(3).source
+                    local _, count = string.gsub(source, "%.", "")
+                    if count == 1 and not string.find(source, "Replicated") then
+                        return function()
+                            return setrawmetatable(newproxy(true), connection)
+                        end
+                    end
+                end
+                return old(self, index)
+            end))
+        end
+
+        old2 = nil; old2 = safe_hook_function(cloneref(game["GetService"](game, "UserInputService")).GetFocusedTextBox, newcclosure(LPH_NO_UPVALUES(function()
+            return nil
+        end)))
+
+        getgenv().done = true
+    end
+end)()
 
 -- > ( global cheat variables )
 
 local user_input_service = cloneref(game:GetService("UserInputService"))
-    local get_mouse_location = user_input_service["GetMouseLocation"]
+local get_mouse_location = user_input_service["GetMouseLocation"]
 local players_service = cloneref(game:GetService("Players"))
-    local local_player = players_service["LocalPlayer"]
-        local mouse = local_player:GetMouse()
+local local_player = players_service["LocalPlayer"]
+local mouse = local_player:GetMouse()
 local tween_service = cloneref(game:GetService("TweenService"))
-    local get_value = tween_service["GetValue"]
+local get_value = tween_service["GetValue"]
 local http_service = cloneref(game:GetService("HttpService"))
 local workspace = workspace
-    local camera = cloneref(workspace["CurrentCamera"])
+local camera = cloneref(workspace["CurrentCamera"])
 local hui = cloneref(gethui())
 
 local color3_fromrgb = Color3["fromRGB"]
-    local color3_lerp = color3_fromrgb()["Lerp"]
+local color3_lerp = color3_fromrgb()["Lerp"]
 local vector2_new = Vector2["new"]
 local udim2_new = UDim2["new"]
 
@@ -90,6 +146,38 @@ local floor = math["floor"]
 local shops = {}
 local wait = task["wait"]
 local type = type
+
+-- > ( perf caches )
+-- mouse position & viewport size are read dozens of times per frame;
+-- both are cached behind a tiny ttl so one native call serves every reader
+
+local perf_clock = os["clock"]
+local cached_mouse_position = nil
+local cached_mouse_tick = 0
+local cached_viewport_size = nil
+local cached_viewport_tick = 0
+
+function get_mouse_position_cached()
+    local t = perf_clock()
+
+    if not cached_mouse_position or t - cached_mouse_tick > 0.0075 then
+        cached_mouse_position = user_input_service["GetMouseLocation"](user_input_service)
+        cached_mouse_tick = t
+    end
+
+    return cached_mouse_position
+end
+
+function get_viewport_size_cached()
+    local t = perf_clock()
+
+    if not cached_viewport_size or t - cached_viewport_tick > 0.0075 then
+        cached_viewport_size = camera.ViewportSize
+        cached_viewport_tick = t
+    end
+
+    return cached_viewport_size
+end
 
 local shadow_image_data = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAQAAABpN6lAAAAABGdBTUEAALGPC/xhBQAAACBjSFJNAAB6JgAAgIQAAPoAAACA6AAAdTAAAOpgAAA6mAAAF3CculE8AAAAAmJLR0QA/4ePzL8AAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAHdElNRQfiAQkTIxqKm+UhAAACvElEQVR42u2dzY7aMBhFjxPHEzJQBolRq77/27XSwBCSkD/PwinS7LpBVwrfeYLjI4Ozuy6Cw+HIyHBkOMCxTiIQmYnMzEQi0S9Hz/EUePIlxDpJB58YGRiZmJlTgIKCQMkLYYmwTtLhe2509AwM6QbkFJRUbKnYEChWHGCgp6WhpoF0AzI8gYodB/bs2BDI1aYPYqKn5cIZR7oPkyejoGTLgZ+888aOEq82fRAjHRdOlEBkZGTwODwvVOx55zdH9rxSqE0fxMCVMxXQ0dHS4TwZOYENO9448osDW4La9EH01GyAhhOfBHKy9Ar4JcGeA0d2Kw5QAu3yT+fJcB7IyJdn8JUtO36sOAB0vFISKNJz7+9fgelTKBAIlGrThxEI3z743Fpf/P/GAqgF1FgAtYAaC6AWUGMB1AJqLIBaQI0FUAuosQBqATUWQC2gxgKoBdRYALWAGgugFlBjAdQCaiyAWkCNBVALqLEAagE1FkAtoMYCqAXUWAC1gBoLoBZQYwHUAmosgFpAjQVQC6ixAGoBNRZALaDGAqgF1FgAtYAaC6AWUGMB1AJqLIBaQI0FUAuosQBqATUWQC2gxgKoBdRYALWAGgugFlBjAdQCaiyAWkCNBVALqLEAagE1FkAtoMYCqAXUWAC1gBoLoBZQYwHUAmosgFpAjQVQC6ixAGoBNRZALaDGAqgF1FgAtYAaC6AWUGMB1AJqLIBaQI0nfpsi7enp1VIPI53uPriaVmfT9ORAT8eVmhJWvDZ3oea6TK5OzOkGzIz3Lc4N0K04QM0HZy609IzMRM98nyI9UQHt6ic3/3JaEkzMnsjIjYYzJdA8xejqH8403BjTDRjoqHFAx+lJZnc/qOkYmP3yD9AAkY7PJxpe7hnTT2BiAGZG2ieb3p6ILj75+LqL4O7Dq245/HoDpAjx32cQ8QtpRORenSWX2AAAABl0RVh0U29mdHdhcmUAcGFpbnQubmV0IDQuMC4xOdTWsmQAAAAASUVORK5CYII=")
 local pixel_image_data = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsIAAA7CARUoSoAAAAAYdEVYdFNvZnR3YXJlAFBhaW50Lk5FVCA1LjEuMvu8A7YAAAC2ZVhJZklJKgAIAAAABQAaAQUAAQAAAEoAAAAbAQUAAQAAAFIAAAAoAQMAAQAAAAIAAAAxAQIAEAAAAFoAAABphwQAAQAAAGoAAAAAAAAA8nYBAOgDAADydgEA6AMAAFBhaW50Lk5FVCA1LjEuMgADAACQBwAEAAAAMDIzMAGgAwABAAAAAQAAAAWgBAABAAAAlAAAAAAAAAACAAEAAgAEAAAAUjk4AAIABwAEAAAAMDEwMAAAAACOO8FX0xe8TgAAAAxJREFUGFdj+P//PwAF/gL+pzWBhAAAAABJRU5ErkJggg==")
@@ -107,7 +195,7 @@ local connections = {}
 local addon_data = {}
 local heartbeat = {}
 local flags = {
-    ["keybinds_position"] = {15, camera["ViewportSize"]["Y"]/2 - 10},
+    ["keybinds_position"] = {15, get_viewport_size_cached()["Y"]/2 - 10},
     ["loaded_addons"] = {},
     ["favorites"] = {},
     ["skins"] = {}
@@ -392,7 +480,15 @@ do
 
     local drawing = Drawing
     LPH_NO_VIRTUALIZE(function()
-        drawing = loadstring(game:HttpGet("https://raw.githubusercontent.com/d1rtylegitness/juju/refs/heads/main/api.lua"))()
+        local s, result = pcall(function()
+            return loadstring(game:HttpGet("https://raw.githubusercontent.com/d1rtylegitness/juju/refs/heads/main/api.lua"))()
+        end)
+
+        if s and result then
+            drawing = result
+        else
+            drawing = Drawing
+        end
     end)()
 
     getgenv()["fake_drawing"] = drawing
@@ -445,13 +541,20 @@ do
     local on_keybind_deleted = signal["new"]()
     local on_keybind_updated = signal["new"]()
     local on_keybind_change = signal["new"]()
-    local transparency_image_data = base64_decode("iVBORw0KGgoAAAANSUhEUgAAABkAAAAMBAMAAABl3At4AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAGUExURf///8rKyoNe1IIAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAYdEVYdFNvZnR3YXJlAFBhaW50Lk5FVCA1LjEuMvu8A7YAAAC2ZVhJZklJKgAIAAAABQAaAQUAAQAAAEoAAAAbAQUAAQAAAFIAAAAoAQMAAQAAAAIAAAAxAQIAEAAAAFoAAABphwQAAQAAAGoAAAAAAAAAYAAAAAEAAABgAAAAAQAAAFBhaW50Lk5FVCA1LjEuMgADAACQBwAEAAAAMDIzMAGgAwABAAAAAQAAAAWgBAABAAAAlAAAAAAAAAACAAEAAgAEAAAAUjk4AAIABwAEAAAAMDEwMAAAAADp1fY4ytpsegAAABdJREFUGNNjYBBEgmg8ZI4AGo+u+hgEAKy7BSkQOa/KAAAAAElFTkSuQmCC")
-    local checkmark_image_data = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAYdEVYdFNvZnR3YXJlAFBhaW50Lk5FVCA1LjEuMvu8A7YAAAC2ZVhJZklJKgAIAAAABQAaAQUAAQAAAEoAAAAbAQUAAQAAAFIAAAAoAQMAAQAAAAIAAAAxAQIAEAAAAFoAAABphwQAAQAAAGoAAAAAAAAAYAAAAAEAAABgAAAAAQAAAFBhaW50Lk5FVCA1LjEuMgADAACQBwAEAAAAMDIzMAGgAwABAAAAAQAAAAWgBAABAAAAlAAAAAAAAAACAAEAAgAEAAAAUjk4AAIABwAEAAAAMDEwMAAAAADp1fY4ytpsegAAAEFJREFUKFOFj0EOACEIxMD//3ncTsSDYbUXDFMhpKS4MVbt4Kf+BI/Nj07YIesRPIpm1QoBIf1qQqgVls4QHmdGTFexGgt5dAJMAAAAAElFTkSuQmCC")
-    local config_image_data = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAYdEVYdFNvZnR3YXJlAFBhaW50Lk5FVCA1LjEuMvu8A7YAAAC2ZVhJZklJKgAIAAAABQAaAQUAAQAAAEoAAAAbAQUAAQAAAFIAAAAoAQMAAQAAAAIAAAAxAQIAEAAAAFoAAABphwQAAQAAAGoAAAAAAAAAYAAAAAEAAABgAAAAAQAAAFBhaW50Lk5FVCA1LjEuMgADAACQBwAEAAAAMDIzMAGgAwABAAAAAQAAAAWgBAABAAAAlAAAAAAAAAACAAEAAgAEAAAAUjk4AAIABwAEAAAAMDEwMAAAAADp1fY4ytpsegAAAFFJREFUKFOdz8ERwCAIBEC0x6QmuzYcORlkhofuB0VEbKKmQoya4tJ0xuzNl6tC64hiNZj6n04eHvlY5YyRz4tCsE3A9FnH7TNILEy5u441kQ8rkEMeEE8J7QAAAABJRU5ErkJggg==")
-    local button_image_data = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAMAAAC67D+PAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAGUExURf///wAAAFXC034AAAACdFJOU/8A5bcwSgAAAAlwSFlzAAAOxAAADsQBlSsOGwAAABh0RVh0U29mdHdhcmUAUGFpbnQuTkVUIDUuMS4y+7wDtgAAALZlWElmSUkqAAgAAAAFABoBBQABAAAASgAAABsBBQABAAAAUgAAACgBAwABAAAAAgAAADEBAgAQAAAAWgAAAGmHBAABAAAAagAAAAAAAAAMdwEA6AMAAAx3AQDoAwAAUGFpbnQuTkVUIDUuMS4yAAMAAJAHAAQAAAAwMjMwAaADAAEAAAABAAAABaAEAAEAAACUAAAAAAAAAAIAAQACAAQAAABSOTgAAgAHAAQAAAAwMTAwAAAAAO7qLRjGzAACAAAAK0lEQVQYVz3KQRIAAAQCwPr/p5WiQ9YAfkDcZiph7HnUucyD3V/RWqbaCjkOewBGmBH+OgAAAABJRU5ErkJggg==")
-    local arrow_image_data = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsIAAA7CARUoSoAAAAAYdEVYdFNvZnR3YXJlAFBhaW50Lk5FVCA1LjEuMvu8A7YAAAC2ZVhJZklJKgAIAAAABQAaAQUAAQAAAEoAAAAbAQUAAQAAAFIAAAAoAQMAAQAAAAIAAAAxAQIAEAAAAFoAAABphwQAAQAAAGoAAAAAAAAA8nYBAOgDAADydgEA6AMAAFBhaW50Lk5FVCA1LjEuMgADAACQBwAEAAAAMDIzMAGgAwABAAAAAQAAAAWgBAABAAAAlAAAAAAAAAACAAEAAgAEAAAAUjk4AAIABwAEAAAAMDEwMAAAAACOO8FX0xe8TgAAABdJREFUKFNj/A8EDHgAE5QmHwwBKxgYAJzaC/5K6BlzAAAAAElFTkSuQmCC")
-    local cog_image_data = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAMAAAC67D+PAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAGUExURf///wAAAFXC034AAAACdFJOU/8A5bcwSgAAAAlwSFlzAAAQKAAAECgBJz8A6wAAABh0RVh0U29mdHdhcmUAUGFpbnQuTkVUIDUuMS4y+7wDtgAAALZlWElmSUkqAAgAAAAFABoBBQABAAAASgAAABsBBQABAAAAUgAAACgBAwABAAAAAgAAADEBAgAQAAAAWgAAAGmHBAABAAAAagAAAAAAAAB3mgEA6AMAAHeaAQDoAwAAUGFpbnQuTkVUIDUuMS4yAAMAAJAHAAQAAAAwMjMwAaADAAEAAAABAAAABaAEAAEAAACUAAAAAAAAAAIAAQACAAQAAABSOTgAAgAHAAQAAAAwMTAwAAAAAEyPNqYn0aVIAAAALElEQVQYV2NgBAIGCAmioQhIQACQCZaGYBAJoZGYSApgUhATYAiikJGRkREACr4AMZ+SUSoAAAAASUVORK5CYII=")
-    local menu_position = udim2_new(0, camera["ViewportSize"]["X"]/2 - 575/2, 0, camera["ViewportSize"]["Y"]/2 - 450*0.5)
+    local img = {}
+    img.transparency = base64_decode("iVBORw0KGgoAAAANSUhEUgAAABkAAAAMBAMAAABl3At4AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAGUExURf///8rKyoNe1IIAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAYdEVYdFNvZnR3YXJlAFBhaW50Lk5FVCA1LjEuMvu8A7YAAAC2ZVhJZklJKgAIAAAABQAaAQUAAQAAAEoAAAAbAQUAAQAAAFIAAAAoAQMAAQAAAAIAAAAxAQIAEAAAAFoAAABphwQAAQAAAGoAAAAAAAAAYAAAAAEAAABgAAAAAQAAAFBhaW50Lk5FVCA1LjEuMgADAACQBwAEAAAAMDIzMAGgAwABAAAAAQAAAAWgBAABAAAAlAAAAAAAAAACAAEAAgAEAAAAUjk4AAIABwAEAAAAMDEwMAAAAADp1fY4ytpsegAAABdJREFUGNNjYBBEgmg8ZI4AGo+u+hgEAKy7BSkQOa/KAAAAAElFTkSuQmCC")
+    img.checkmark = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAYdEVYdFNvZnR3YXJlAFBhaW50Lk5FVCA1LjEuMvu8A7YAAAC2ZVhJZklJKgAIAAAABQAaAQUAAQAAAEoAAAAbAQUAAQAAAFIAAAAoAQMAAQAAAAIAAAAxAQIAEAAAAFoAAABphwQAAQAAAGoAAAAAAAAAYAAAAAEAAABgAAAAAQAAAFBhaW50Lk5FVCA1LjEuMgADAACQBwAEAAAAMDIzMAGgAwABAAAAAQAAAAWgBAABAAAAlAAAAAAAAAACAAEAAgAEAAAAUjk4AAIABwAEAAAAMDEwMAAAAADp1fY4ytpsegAAAEFJREFUKFOFj0EOACEIxMD//3ncTsSDYbUXDFMhpKS4MVbt4Kf+BI/Nj07YIesRPIpm1QoBIf1qQqgVls4QHmdGTFexGgt5dAJMAAAAAElFTkSuQmCC")
+    img.config = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAYdEVYdFNvZnR3YXJlAFBhaW50Lk5FVCA1LjEuMvu8A7YAAAC2ZVhJZklJKgAIAAAABQAaAQUAAQAAAEoAAAAbAQUAAQAAAFIAAAAoAQMAAQAAAAIAAAAxAQIAEAAAAFoAAABphwQAAQAAAGoAAAAAAAAAYAAAAAEAAABgAAAAAQAAAFBhaW50Lk5FVCA1LjEuMgADAACQBwAEAAAAMDIzMAGgAwABAAAAAQAAAAWgBAABAAAAlAAAAAAAAAACAAEAAgAEAAAAUjk4AAIABwAEAAAAMDEwMAAAAADp1fY4ytpsegAAAFFJREFUKFOdz8ERwCAIBEC0x6QmuzYcORlkhofuB0VEbKKmQoya4tJ0xuzNl6tC64hiNZj6n04eHvlY5YyRz4tCsE3A9FnH7TNILEy5u441kQ8rkEMeEE8J7QAAAABJRU5ErkJggg==")
+    img.button = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAMAAAC67D+PAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAGUExURf///wAAAFXC034AAAACdFJOU/8A5bcwSgAAAAlwSFlzAAAOxAAADsQBlSsOGwAAABh0RVh0U29mdHdhcmUAUGFpbnQuTkVUIDUuMS4y+7wDtgAAALZlWElmSUkqAAgAAAAFABoBBQABAAAASgAAABsBBQABAAAAUgAAACgBAwABAAAAAgAAADEBAgAQAAAAWgAAAGmHBAABAAAAagAAAAAAAAAMdwEA6AMAAAx3AQDoAwAAUGFpbnQuTkVUIDUuMS4yAAMAAJAHAAQAAAAwMjMwAaADAAEAAAABAAAABaAEAAEAAACUAAAAAAAAAAIAAQACAAQAAABSOTgAAgAHAAQAAAAwMTAwAAAAAO7qLRjGzAACAAAAK0lEQVQYVz3KQRIAAAQCwPr/p5WiQ9YAfkDcZiph7HnUucyD3V/RWqbaCjkOewBGmBH+OgAAAABJRU5ErkJggg==")
+    img.arrow = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsIAAA7CARUoSoAAAAAYdEVYdFNvZnR3YXJlAFBhaW50Lk5FVCA1LjEuMvu8A7YAAAC2ZVhJZklJKgAIAAAABQAaAQUAAQAAAEoAAAAbAQUAAQAAAFIAAAAoAQMAAQAAAAIAAAAxAQIAEAAAAFoAAABphwQAAQAAAGoAAAAAAAAA8nYBAOgDAADydgEA6AMAAFBhaW50Lk5FVCA1LjEuMgADAACQBwAEAAAAMDIzMAGgAwABAAAAAQAAAAWgBAABAAAAlAAAAAAAAAACAAEAAgAEAAAAUjk4AAIABwAEAAAAMDEwMAAAAACOO8FX0xe8TgAAABdJREFUKFNj/A8EDHgAE5QmHwwBKxgYAJzaC/5K6BlzAAAAAElFTkSuQmCC")
+    img.cog = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAMAAAC67D+PAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAGUExURf///wAAAFXC034AAAACdFJOU/8A5bcwSgAAAAlwSFlzAAAQKAAAECgBJz8A6wAAABh0RVh0U29mdHdhcmUAUGFpbnQuTkVUIDUuMS4y+7wDtgAAALZlWElmSUkqAAgAAAAFABoBBQABAAAASgAAABsBBQABAAAAUgAAACgBAwABAAAAAgAAADEBAgAQAAAAWgAAAGmHBAABAAAAagAAAAAAAAB3mgEA6AMAAHeaAQDoAwAAUGFpbnQuTkVUIDUuMS4yAAMAAJAHAAQAAAAwMjMwAaADAAEAAAABAAAABaAEAAEAAACUAAAAAAAAAAIAAQACAAQAAABSOTgAAgAHAAQAAAAwMTAwAAAAAEyPNqYn0aVIAAAALElEQVQYV2NgBAIGCAmioQhIQACQCZaGYBAJoZGYSApgUhATYAiikJGRkREACr4AMZ+SUSoAAAAASUVORK5CYII=")
+    arrow_image_data = img.arrow
+    checkmark_image_data = img.checkmark
+    transparency_image_data = img.transparency
+    button_image_data = img.button
+    cog_image_data = img.cog
+    config_image_data = img.config
+    local menu_position = udim2_new(0, get_viewport_size_cached()["X"]/2 - 575/2, 0, get_viewport_size_cached()["Y"]/2 - 450*0.5)
 
     local half_transparency = {Transparency = 0.5}
     local stop_panel_search = nil
@@ -659,7 +762,8 @@ do
 
     -- > ( menu creation )
 
-    local cursor = drawing_proxy["new"]("Image", {
+    local ui = {}
+    ui.cursor = drawing_proxy["new"]("Image", {
         ["Position"] = menu_position,
         ["Size"] = udim2_new(0, 24, 0, 24),
         ["Color"] = menu["colors"]["cursor"],
@@ -669,8 +773,7 @@ do
         ["ZIndex"] = 1011,
         ["Visible"] = true
     })
-
-    local frame = drawing_proxy["new"]("Image", {
+    ui.frame = drawing_proxy["new"]("Image", {
         ["Position"] = menu_position,
         ["Size"] = udim2_new(0, 575, 0, 450),
         ["Color"] = menu["colors"]["background"],
@@ -679,52 +782,47 @@ do
         ["Transparency"] = 1,
         ["Visible"] = false
     })
-
-    local inside = drawing_proxy["new"]("Image", {
+    ui.inside = drawing_proxy["new"]("Image", {
         ["Position"] = udim2_new(0, 1, 0, 1),
         ["Size"] = udim2_new(1, -2, 1, -2),
         ["Color"] = menu["colors"]["section"],
         ["Rounding"] = 4,
         ["Data"] = pixel_image_data,
         ["Transparency"] = 1,
-        ["Parent"] = frame,
+        ["Parent"] = ui.frame,
         ["Visible"] = false
     })
-
-    local logo = drawing_proxy["new"]("Image", {
+    ui.logo = drawing_proxy["new"]("Image", {
         ["Color"] = menu["colors"]["accent"],
         ["Data"] = readfile("juju recode/assets/logo.png"),
         ["Position"] = udim2_new(0, 15, 0, 15),
-        ["Parent"] = inside,
+        ["Parent"] = ui.inside,
         ["Size"] = udim2_new(0, 35, 0, 35),
         ["Visible"] = true,
         ["Transparency"] = 1
     })
-
-    local juju_text = drawing_proxy["new"]("Text", {
+    ui.juju_text = drawing_proxy["new"]("Text", {
         ["Font"] = 1,
         ["Color"] = color3_fromrgb(255, 255, 255),
         ["Text"] = "juju",
-        ["Parent"] = logo,
+        ["Parent"] = ui.logo,
         ["Position"] = udim2_new(1, 5, 0, 3),
         ["Size"] = 14,
         ["Visible"] = true,
         ["Transparency"] = 1
     })
-
-    local build_text = drawing_proxy["new"]("Text", {
+    ui.build_text = drawing_proxy["new"]("Text", {
         ["Font"] = 1,
         ["Color"] = menu["colors"]["accent"],
-        ["Text"] = (LRM_ScriptName == "da hood" or LRM_ScriptName == "da hood copies") and "live" or "live",
-        ["Parent"] = logo,
+        ["Text"] = (LRM_ScriptName == "da hood" or LRM_ScriptName == "da hood copies") and "reborn" or "reborn",
+        ["Parent"] = ui.logo,
         ["Position"] = udim2_new(1, 5, 0, 19),
         ["Size"] = 14,
         ["Visible"] = true,
         ["Transparency"] = 1
     })
-
-    local right_side = drawing_proxy["new"]("Square", {
-        ["Parent"] = inside,
+    ui.right_side = drawing_proxy["new"]("Square", {
+        ["Parent"] = ui.inside,
         ["Position"] = udim2_new(0, 101, 0, 0),
         ["Size"] = udim2_new(1, -101, 1, 0),
         ["Color"] = menu["colors"]["background"],
@@ -732,9 +830,8 @@ do
         ["Filled"] = true,
         ["Transparency"] = 1
     })
-
-    local right_side_cover = drawing_proxy["new"]("Square", {
-        ["Parent"] = inside,
+    ui.right_side_cover = drawing_proxy["new"]("Square", {
+        ["Parent"] = ui.inside,
         ["Position"] = udim2_new(0, 101, 0, 0),
         ["Size"] = udim2_new(1, -101, 1, 0),
         ["Color"] = menu["colors"]["background"],
@@ -743,9 +840,8 @@ do
         ["ZIndex"] = 999,
         ["Transparency"] = 0
     })
-
-    local right_side_divider = drawing_proxy["new"]("Square", {
-        ["Parent"] = inside,
+    ui.right_side_divider = drawing_proxy["new"]("Square", {
+        ["Parent"] = ui.inside,
         ["Position"] = udim2_new(0, 100, 0, 0),
         ["Size"] = udim2_new(0, 1, 1, 0),
         ["Color"] = menu["colors"]["background"],
@@ -754,40 +850,36 @@ do
         ["Filled"] = true,
         ["Transparency"] = 1
     })
-
-    local search_image = drawing_proxy["new"]("Image", {
+    ui.search_image = drawing_proxy["new"]("Image", {
         ["Color"] = menu["colors"]["image"],
         ["Data"] = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAwAAAAMCAYAAABWdVznAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAYdEVYdFNvZnR3YXJlAFBhaW50Lk5FVCA1LjEuMvu8A7YAAAC2ZVhJZklJKgAIAAAABQAaAQUAAQAAAEoAAAAbAQUAAQAAAFIAAAAoAQMAAQAAAAIAAAAxAQIAEAAAAFoAAABphwQAAQAAAGoAAAAAAAAAYAAAAAEAAABgAAAAAQAAAFBhaW50Lk5FVCA1LjEuMgADAACQBwAEAAAAMDIzMAGgAwABAAAAAQAAAAWgBAABAAAAlAAAAAAAAAACAAEAAgAEAAAAUjk4AAIABwAEAAAAMDEwMAAAAADp1fY4ytpsegAAAGdJREFUKFONkGEWgCAIg5GTdP9LlqPBA8Pq+yFuOvA5JHFOuDXGhNvAjPVipgtZAFAGtIuvbrSdRA4sJQQBKB/wOM6V9TevAe+cn6su8liwaieSuwuONy4/k0PdZHglsKOEWD+5QyIX+wJP/y1yP3IAAAAASUVORK5CYII="),
         ["Position"] = udim2_new(0, 27, 1, -27),
-        ["Parent"] = inside,
+        ["Parent"] = ui.inside,
         ["Size"] = udim2_new(0, 12, 0, 12),
         ["Transparency"] = 1,
         ["ZIndex"] = 999,
         ["Visible"] = true,
     })
-
-    local themes_image = drawing_proxy["new"]("Image", {
+    ui.themes_image = drawing_proxy["new"]("Image", {
         ["Color"] = menu["colors"]["image"],
         ["Data"] = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAwAAAAMCAYAAABWdVznAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADdYAAA3WAZBveZwAAAAYdEVYdFNvZnR3YXJlAFBhaW50Lk5FVCA1LjEuMvu8A7YAAAC2ZVhJZklJKgAIAAAABQAaAQUAAQAAAEoAAAAbAQUAAQAAAFIAAAAoAQMAAQAAAAIAAAAxAQIAEAAAAFoAAABphwQAAQAAAGoAAAAAAAAAiF8BAOgDAACIXwEA6AMAAFBhaW50Lk5FVCA1LjEuMgADAACQBwAEAAAAMDIzMAGgAwABAAAAAQAAAAWgBAABAAAAlAAAAAAAAAACAAEAAgAEAAAAUjk4AAIABwAEAAAAMDEwMAAAAAC1cWHl18YwawAAAH5JREFUKFOFkAsOgCAMQwE5lIfx/qeA4Do7ZCL6ErOWtHwMb7TWinyN1pE4Owxul5uJnAp2ljGFo0B5F1Zhw0p6JVxDfIZegQymtroRTK9wj0bYjl5QtTCGPkqHLGcXpFRQGtYqwhDuDU9YKhYGaQwjAGix0S7W/z0UAO0PIZyip02b2JexIAAAAABJRU5ErkJggg=="),
         ["Position"] = udim2_new(0, 44, 1, -27),
-        ["Parent"] = inside,
+        ["Parent"] = ui.inside,
         ["Size"] = udim2_new(0, 12, 0, 12),
         ["Transparency"] = 1,
         ["Visible"] = true,
     })
-
-    local settings_image = drawing_proxy["new"]("Image", {
+    ui.settings_image = drawing_proxy["new"]("Image", {
         ["Color"] = menu["colors"]["image"],
         ["Data"] = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAwAAAAMCAMAAABhq6zVAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAGUExURf///wAAAFXC034AAAACdFJOU/8A5bcwSgAAAAlwSFlzAAALEwAACxMBAJqcGAAAABh0RVh0U29mdHdhcmUAUGFpbnQuTkVUIDUuMS4y+7wDtgAAALZlWElmSUkqAAgAAAAFABoBBQABAAAASgAAABsBBQABAAAAUgAAACgBAwABAAAAAgAAADEBAgAQAAAAWgAAAGmHBAABAAAAagAAAAAAAABJGQEA6AMAAEkZAQDoAwAAUGFpbnQuTkVUIDUuMS4yAAMAAJAHAAQAAAAwMjMwAaADAAEAAAABAAAABaAEAAEAAACUAAAAAAAAAAIAAQACAAQAAABSOTgAAgAHAAQAAAAwMTAwAAAAAC/Sb/YZ+v7JAAAAMklEQVQYV1WLARIAQAQC9f9Pn65oNAZpFajyUHn0MtJZWkbdt+QxBwtA47X1kzDk9QY8FowASc0mZqAAAAAASUVORK5CYII="),
         ["Position"] = udim2_new(0, 61, 1, -27),
-        ["Parent"] = inside,
+        ["Parent"] = ui.inside,
         ["Size"] = udim2_new(0, 12, 0, 12),
         ["Transparency"] = 1,
         ["Visible"] = true,
     })
-
-    local tab_line = drawing_proxy["new"]("Square", {
-        ["Parent"] = inside,
+    ui.tab_line = drawing_proxy["new"]("Square", {
+        ["Parent"] = ui.inside,
         ["Position"] = udim2_new(0, 0, 0, 0),
         ["Size"] = udim2_new(0, 1, 0, 12),
         ["Filled"] = true,
@@ -795,9 +887,8 @@ do
         ["Color"] = menu["colors"]["accent"],
         ["Visible"] = true,
     })
-
-    local search_border = drawing_proxy["new"]("Image", {
-        ["Parent"] = frame,
+    ui.search_border = drawing_proxy["new"]("Image", {
+        ["Parent"] = ui.frame,
         ["Position"] = udim2_new(0, 11, 1, -32),
         ["Size"] = udim2_new(0, 78, 0, 20),
         ["Color"] = menu["colors"]["border"],
@@ -806,9 +897,8 @@ do
         ["Data"] = pixel_image_data,
         ["Visible"] = false,
     })
-
-    local search_inside = drawing_proxy["new"]("Image", {
-        ["Parent"] = search_border,
+    ui.search_inside = drawing_proxy["new"]("Image", {
+        ["Parent"] = ui.search_border,
         ["Position"] = udim2_new(0, 1, 0, 1),
         ["Size"] = udim2_new(1, -2, 1, -2),
         ["Color"] = menu["colors"]["background"],
@@ -817,9 +907,8 @@ do
         ["Transparency"] = 1,
         ["Visible"] = true,
     })
-
-    local search_out_border = drawing_proxy["new"]("Image", {
-        ["Parent"] = frame,
+    ui.search_out_border = drawing_proxy["new"]("Image", {
+        ["Parent"] = ui.frame,
         ["Position"] = udim2_new(0, 11, 1, -57),
         ["Size"] = udim2_new(0, 78, 0, 20),
         ["Color"] = menu["colors"]["border"],
@@ -829,9 +918,8 @@ do
         ["ZIndex"] = 999,
         ["Visible"] = false,
     })
-
-    local search_out = drawing_proxy["new"]("Image", {
-        ["Parent"] = search_out_border,
+    ui.search_out = drawing_proxy["new"]("Image", {
+        ["Parent"] = ui.search_out_border,
         ["Position"] = udim2_new(0, 1, 0, 1),
         ["Size"] = udim2_new(1, -2, 1, -2),
         ["Color"] = menu["colors"]["background"],
@@ -841,20 +929,18 @@ do
         ["ZIndex"] = 1000,
         ["Visible"] = true,
     })
-
-    local search_text = drawing_proxy["new"]("Text", {
+    ui.search_text = drawing_proxy["new"]("Text", {
         ["Color"] = menu["colors"]["active_text"],
         ["Text"] = "",
         ["Size"] = 12,
         ["Font"] = 1,
         ["Transparency"] = 1,
         ["Visible"] = true,
-        ["Parent"] = search_inside,
+        ["Parent"] = ui.search_inside,
         ["Center"] = false,
         ["Position"] = udim2_new(0, 18, 0, 2),
     })
-
-    local drag_frame = drawing_proxy["new"]("Image", {
+    ui.drag_frame = drawing_proxy["new"]("Image", {
         ["Position"] = menu_position,
         ["Size"] = udim2_new(0, 575, 0, 450),
         ["Color"] = menu["colors"]["background"],
@@ -864,29 +950,55 @@ do
         ["ZIndex"] = 1000,
         ["Visible"] = false
     })
-
-    local drag_inside = drawing_proxy["new"]("Image", {
+    ui.drag_inside = drawing_proxy["new"]("Image", {
         ["Position"] = udim2_new(0, 1, 0, 1),
         ["Size"] = udim2_new(1, -2, 1, -2),
         ["Color"] = menu["colors"]["section"],
         ["Rounding"] = 4,
         ["Data"] = pixel_image_data,
         ["Transparency"] = 1,
-        ["Parent"] = drag_frame,
+        ["Parent"] = ui.drag_frame,
         ["ZIndex"] = 1001,
         ["Visible"] = true
     })
-
-    local drag_logo = drawing_proxy["new"]("Image", {
+    ui.drag_logo = drawing_proxy["new"]("Image", {
         ["Color"] = menu["colors"]["accent"],
         ["Data"] = base64_decode("iVBORw0KGgoAAAANSUhEUgAAACMAAAAjCAYAAAAe2bNZAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAYdEVYdFNvZnR3YXJlAFBhaW50Lk5FVCA1LjEuMvu8A7YAAAC2ZVhJZklJKgAIAAAABQAaAQUAAQAAAEoAAAAbAQUAAQAAAFIAAAAoAQMAAQAAAAIAAAAxAQIAEAAAAFoAAABphwQAAQAAAGoAAAAAAAAAYAAAAAEAAABgAAAAAQAAAFBhaW50Lk5FVCA1LjEuMgADAACQBwAEAAAAMDIzMAGgAwABAAAAAQAAAAWgBAABAAAAlAAAAAAAAAACAAEAAgAEAAAAUjk4AAIABwAEAAAAMDEwMAAAAADp1fY4ytpsegAAA3JJREFUWEe92EtIVFEcx/HrIx9ZWvkoTSFLDJPQIBPShRRFSFCQQkVlkPSAViLUImgXgZsWtWpVG1fRQmgRBBEGUUFtWrQoqCjoSQ8qet6+v3PvmTkzXh9zm5kffHTunXHm3P953DMW+L7v5SFlWIu76MVTFOMbPuE3vEL9yEP0wc3BQ+8C9uE5+lCJAnj5qkwpenDDHKWmEa/g56syf6APTE8/PgcP89NNqkoNinBTJ8gwunAHX2G6J9fdpItdDo0PZRceQ1VSI34h0YBcV0YDd0Xw0ORK+Ftd8xMplchlYzRDKrDaHCWj7opMLhujD23ARXMUZARvoIotRAnMtFZy1RhbFS10brToaaFrgbqqFjlvjK3KuDkKoqo8w1Jc1wmiyiSSi8bYqnSYo2Qeohxa/NTQbXiP5CDW1M6yYqyBm9Poxn5z5PsHUI9CJP4225WZripaV3TuMq7hNt7iL5JxW5YFUVWZxJngoX8cer4EU/5+yon/oNW8CnsQFZ1fiVJE/X1WbgfqGs2e+WjFPaRnEx7hA8zeJSpxG6MGaLxpalahCW24BDcDuI/X+IEZPyzTxqgBWj0XoA7aMKka55Ae3ZknoOmrLcTssf01C03BcjRgI4aRnvHwt806zEPU+0WKPOlQ5crQhM04BTdXsQP95iiZI6iGqfxcRZ4MaZrWoBdjcHMMPWhELQbgZj0ip+9MIk9C5dU01Erp5ii6oAZoiqrBzXCjhur5jKoiUSd1Ra0Yhc1ZqEJ10PP2gyqwHW42IOOqSPoJXekqjMBGi5WuXmPHvdoitMDNYahrM66KuAd6A5X3IGy2QANRH5z+Wq22g3DTiYxmkMs90JtoPNj0oRIpd9aQXtsBN7uxCLGqIu5dW19B7be+vdD+4wtS76zBwlcNfU210eZaK61ezyXGi22Mlnc1ptsced4DRL2xXqd7UCfO60SYrXiJua200yUskUqrzY4yBA3ClBKGNIg1W9xo+i9G7O6x3G6yVdA5URXc6KaobjxpjoKM4ha0uY7dPYk4LdPVaRAq7dA013ldsRa49LVnAm2ItaZEcSvzHS+Ch2ZM1EPfbZagHTsxBuUEVCH9n0WDNysx/RxGDdO2QP8z0VcMbQHeQfsVd58yhElowGqPkrW4jVG0V1kGffnSxtnNIWi39gQfMe2OLV487x+AjByM3j95+QAAAABJRU5ErkJggg=="),
         ["Position"] = udim2_new(0.5, -20, 0.5, -20),
-        ["Parent"] = drag_inside,
+        ["Parent"] = ui.drag_inside,
         ["Size"] = udim2_new(0, 40, 0, 40),
         ["Visible"] = true,
         ["ZIndex"] = 1002,
         ["Transparency"] = 1
     })
+
+    -- > ( menu drawing shortcuts )
+    --[[ kept as globals on purpose:
+         the menu scope holds 200+ live locals and luau
+         caps a function at 200 registers, so these
+         must not burn compiler registers ]]
+
+    cursor = ui.cursor
+    frame = ui.frame
+    inside = ui.inside
+    logo = ui.logo
+    juju_text = ui.juju_text
+    build_text = ui.build_text
+    right_side = ui.right_side
+    right_side_cover = ui.right_side_cover
+    right_side_divider = ui.right_side_divider
+    search_image = ui.search_image
+    themes_image = ui.themes_image
+    settings_image = ui.settings_image
+    tab_line = ui.tab_line
+    search_border = ui.search_border
+    search_inside = ui.search_inside
+    search_out_border = ui.search_out_border
+    search_out = ui.search_out
+    search_text = ui.search_text
+    drag_frame = ui.drag_frame
+    drag_inside = ui.drag_inside
+    drag_logo = ui.drag_logo
 
     -- > ( keybinds )
 
@@ -927,7 +1039,7 @@ do
     -- > ( keybinds list )
 
     local list_frame = drawing_proxy["new"]("Image", {
-        ["Position"] = udim2_new(0, 15, 0, camera["ViewportSize"]["Y"]/2 - 10),
+        ["Position"] = udim2_new(0, 15, 0, get_viewport_size_cached()["Y"]/2 - 10),
         ["Size"] = udim2_new(0, 74, 0, 20),
         ["Color"] = menu["colors"]["border"],
         ["Transparency"] = 0,
@@ -1478,11 +1590,11 @@ do
 
     -- > ( elements )
 
+    show_tooltip = function() end
+    hide_tooltip = function() end
+
     local element = {}
     element["__index"] = element
-
-    local section = {}
-    section["__index"] = section
 
     local item = {}
     item["__index"] = item
@@ -1514,7 +1626,11 @@ do
         type_line["Position"] = udim2_new(0, position["X"] + active_typing["TextBounds"]["X"] + 3, 0, position["Y"] + 1)
     end)
 
-    local create_click_connection = function(new_handle, object, callback)
+local create_click_connection = function(new_handle, object, callback)
+        if new_handle == nil or object == nil then
+            return 
+        end
+
         local handle = click_connections[new_handle]
 
         if not handle then
@@ -1522,17 +1638,19 @@ do
             handle = click_connections[new_handle]
         end
 
-        local new_handle = handle[object]
-        if not new_handle then
+
+        local callbacks = handle[object] 
+        if not callbacks then
             handle[object] = {
                 callback
             }
         else
-            new_handle[#new_handle + 1] = callback
+            callbacks[#callbacks + 1] = callback
         end
     end
 
     local create_scroll_connection = function(new_handle, object, callback)
+        if new_handle == nil or object == nil then return end
         local handle = scroll_connections[new_handle]
 
         if not handle then
@@ -1551,6 +1669,7 @@ do
     end
 
     local create_right_click_connection = function(new_handle, object, callback)
+        if new_handle == nil or object == nil then return end
         local handle = right_click_connections[new_handle]
 
         if not handle then
@@ -1569,6 +1688,7 @@ do
     end
 
     create_hover_connection = function(new_handle, object, hover_callback, leave_callback)
+        if new_handle == nil or object == nil then return end
         local handle = hover_connections[new_handle]
 
         if not handle then
@@ -1602,7 +1722,7 @@ do
 
         local position = border["real_position"]
         local x_position = position["X"] + 30
-        local screen_size = camera["ViewportSize"]
+        local screen_size = get_viewport_size_cached()
         local x_size = screen_size["X"]
         local y_size = screen_size["Y"]
 
@@ -2918,7 +3038,7 @@ do
         set_colorpicker_color(Color3.fromHSV(actives["colorpicker_hue"], actives["colorpicker_saturation"], actives["colorpicker_value"]), true)
 
         moving = create_connection(mouse["Move"], function()
-            local position = get_mouse_location(user_input_service)
+            local position = get_mouse_position_cached()
 
             actives["colorpicker_saturation"] = clamp((position["X"] - frame_position_x) / 163, 0, 1)
             actives["colorpicker_value"] = clamp((163 - (position["Y"] - frame_position_y)) / 163, 0, 1)
@@ -2935,7 +3055,7 @@ do
         set_colorpicker_color(Color3.fromHSV(actives["colorpicker_hue"], actives["colorpicker_saturation"], actives["colorpicker_value"]), true)
 
         moving = create_connection(mouse["Move"], function()
-            actives["colorpicker_hue"] = clamp((get_mouse_location(user_input_service)["X"] - frame_position_x) / 158, 0, 1)
+            actives["colorpicker_hue"] = clamp((get_mouse_position_cached()["X"] - frame_position_x) / 158, 0, 1)
             set_colorpicker_color(Color3.fromHSV(actives["colorpicker_hue"], actives["colorpicker_saturation"], actives["colorpicker_value"]), true)
         end)
     end)
@@ -2946,14 +3066,14 @@ do
         set_colorpicker_transparency(clamp(1 - (position["X"] - frame_position_x) / 163, 0, 1), true)
 
         moving = create_connection(mouse["Move"], function()
-            set_colorpicker_transparency(clamp(1 - (get_mouse_location(user_input_service)["X"] - frame_position_x) / 163, 0, 1), true)
+            set_colorpicker_transparency(clamp(1 - (get_mouse_position_cached()["X"] - frame_position_x) / 163, 0, 1), true)
         end)
     end)
 
     local open_colorpicker = function(element)
         local position = element["drawings"]["colorpicker_border"]["real_position"]
         local x_position = position["X"] + 30
-        local screen_size = camera["ViewportSize"]
+        local screen_size = get_viewport_size_cached()
         local x_size = screen_size["X"]
         local y_size = screen_size["Y"]
 
@@ -3108,7 +3228,7 @@ do
             end)
         end
 
-        local mouse_position = get_mouse_location(user_input_service)
+        local mouse_position = get_mouse_position_cached()
             local mouse_position_x = mouse_position["X"]
             local mouse_position_y = mouse_position["Y"]
 
@@ -3207,7 +3327,7 @@ do
                         end)
                     end
 
-                    local new_mouse_position = get_mouse_location(user_input_service)
+                    local new_mouse_position = get_mouse_position_cached()
                     local new_position = udim2_new(0, fake_menu_position["X"] - (mouse_position_x - new_mouse_position["X"]), 0, fake_menu_position["Y"] - (mouse_position_y - new_mouse_position["Y"]))
 
                     if abs(menu_position["X"]["Offset"]-new_position["X"]["Offset"]) > 1.1 or abs(menu_position["Y"]["Offset"]-new_position["Y"]["Offset"]) > 1.1 then
@@ -3243,7 +3363,7 @@ do
                         local fake_hud_position = hud_position
 
                         moving = create_connection(mouse["Move"], function()
-                            local new_mouse_position = get_mouse_location(user_input_service)
+                            local new_mouse_position = get_mouse_position_cached()
                             local new_position_x = fake_hud_position["X"] - (mouse_position_x - new_mouse_position["X"])
                             local new_position_y = fake_hud_position["Y"] - (mouse_position_y - new_mouse_position["Y"])
                             local new_position = udim2_new(0, new_position_x, 0, new_position_y)
@@ -3264,7 +3384,7 @@ do
             return
         end
 
-        local mouse_position = get_mouse_location(user_input_service)
+        local mouse_position = get_mouse_position_cached()
             local mouse_position_x = mouse_position["X"]
             local mouse_position_y = mouse_position["Y"]
 
@@ -3301,8 +3421,18 @@ do
         end
     end)
 
+    local last_hover_tick = 0
+
     local handle_hover = LPH_JIT_MAX(function()
-        local mouse_position = get_mouse_location(user_input_service)
+        local hover_tick = clock()
+
+        if hover_tick - last_hover_tick < 0.006 then
+            return
+        end
+
+        last_hover_tick = hover_tick
+
+        local mouse_position = get_mouse_position_cached()
             local mouse_position_x = mouse_position["X"]
             local mouse_position_y = mouse_position["Y"]
 
@@ -3438,7 +3568,7 @@ do
             return
         end
 
-        local mouse_position = get_mouse_location(user_input_service)
+        local mouse_position = get_mouse_position_cached()
             local mouse_position_x = mouse_position["X"]
             local mouse_position_y = mouse_position["Y"]
 
@@ -3542,7 +3672,7 @@ do
 
         tween(cursor, transparency, exponential, out, 0.18)
 
-        local mouse_position = get_mouse_location(user_input_service)
+        local mouse_position = get_mouse_position_cached()
         user_input_service["MouseIconEnabled"] = not menu_open
         cursor["Position"] = udim2_new(0, mouse_position["X"], 0, mouse_position["Y"])
         
@@ -4170,7 +4300,7 @@ do
             ["Transparency"] = 1,
             ["Rounding"] = 4,
             ["Data"] = pixel_image_data,
-            ["ZIndex"] = zindex,
+            ["ZIndex"] = 2,
             ["Visible"] = true,
         })
         local search_inside = drawing_proxy["new"]("Image", {
@@ -4181,7 +4311,7 @@ do
             ["Transparency"] = 1,
             ["Rounding"] = 4,
             ["Data"] = pixel_image_data,
-            ["ZIndex"] = zindex,
+            ["ZIndex"] = 2,
             ["Visible"] = true,
         })
         local search_text = drawing_proxy["new"]("Text", {
@@ -4839,7 +4969,7 @@ do
                 create_click_connection(parent, slider_border, function(mouse_position)
                     local min, max, decimals = properties["min"], properties["max"], properties["decimals"]
                     moving = create_connection(mouse["Move"], function()
-                        new_element:set_slider(round(min + (max - min) * (get_mouse_location(user_input_service)["X"] - slider_inside["real_position"]["X"])/slider_inside["real_size"]["X"], decimals))
+                        new_element:set_slider(round(min + (max - min) * (get_mouse_position_cached()["X"] - slider_inside["real_position"]["X"])/slider_inside["real_size"]["X"], decimals))
                     end)
                     new_element:set_slider(round(min + (max - min) * (mouse_position["X"] - slider_inside["real_position"]["X"])/slider_inside["real_size"]["X"], decimals))
                 end)
@@ -5353,7 +5483,7 @@ do
         local tip = info["tip"]
 
         if tip then
-            create_hover_connection(parent, button_border, function()
+            create_hover_connection(parent, frame, function()
                 show_tooltip(new_element, tip)
             end, function()
                 hide_tooltip(new_element, tip)
@@ -5818,7 +5948,7 @@ do
     do
         local update_notifications = LPH_NO_VIRTUALIZE(function()
             local notifications = menu["notifications"]
-            local size = camera["ViewportSize"]["Y"]*0.88
+            local size = get_viewport_size_cached()["Y"]*0.88
             if #notifications > 6 then
                 notifications[1]:dismiss()
             end
@@ -5857,7 +5987,7 @@ do
                     ["Size"] = udim2_new(0, 12, 0, 12),
                     ["Color"] = color,
                     ["Transparency"] = 0,
-                    ["Data"] = data or notification_types[type][2],
+                    ["Data"] = data or (notification_types[type] and notification_types[type][2]) or notification_types[1][2],
                     ["Rounding"] = 4,
                     ["ZIndex"] = 1102,
                     ["Visible"] = true,
@@ -5909,7 +6039,7 @@ do
                 end)
 
                 local notifications = menu["notifications"]
-                local viewport_size = camera["ViewportSize"]
+                local viewport_size = get_viewport_size_cached()
 
                 inside["Position"] = udim2_new(0, (viewport_size["X"]*0.5) - (x_size*0.5), 0, viewport_size["Y"]*0.88 - (#notifications*29 - 5))
 
@@ -6121,15 +6251,13 @@ do
         local function encrypt(input, key)
             local salt = tostring(math_random(1000, 9999))
             input = salt .. input .. string["reverse"](salt)
-            local shuffled_key = shuffle_key(key)
-            local xored = xor_crypt(input, shuffled_key)
+            local xored = xor_crypt(input, key)
             return to_base64(xored)
         end
 
         local function decrypt(input, key)
             local decoded = from_base64(input)
-            local shuffled_key = shuffle_key(key)
-            local xored = xor_crypt(decoded, shuffled_key)
+            local xored = xor_crypt(decoded, key)
             local salt_length = 4
 
             return string["sub"](xored, salt_length + 1, -salt_length - 1)
@@ -6267,11 +6395,17 @@ do
 
                     if loaded_addons then
                         for _, addon in addon_data do
+                            local still_loaded = false
+
                             for i = 1, #loaded_addons do
                                 if addon == loaded_addons[i] then
-                                    continue
+                                    still_loaded = true
+                                    break
                                 end
-                                menu["unload_addon"](loaded_addons[i])
+                            end
+
+                            if not still_loaded then
+                                menu["unload_addon"](addon)
                             end
                         end
 
@@ -7606,7 +7740,14 @@ do
             }, {
                 ["button"] = {}
             })["on_clicked"], function()
-                local file = "juju recode/themes/"..flags["!name"]..".th"
+                local theme_name = flags["!name"]
+
+                if not theme_name or #theme_name == 0 then
+                    menu["new_notification"]("failed to save theme due to empty name", 3)
+                    return
+                end
+
+                local file = "juju recode/themes/"..theme_name..".th"
                 local data = {}
 
                 local elements = theme_section["elements"]
@@ -7622,7 +7763,7 @@ do
 
                 writefile(file, http_service:JSONEncode(data))
 
-                menu["new_notification"]("successfully saved theme "..flags["!name"], 1)
+                menu["new_notification"]("successfully saved theme "..theme_name, 1)
 
                 local elements = theme_section["elements"]
 
@@ -7635,48 +7776,61 @@ do
                 end
             end)
 
-            create_click_connection(frame, themes_image, function()
-                if actives["settings"] == theme_section then
-                    close_settings(theme_section)
-                else
-                    open_settings(theme_section)
-                end
-            end)
+            if frame ~= nil and themes_image ~= nil then
+                create_click_connection(frame, themes_image, function()
+                    if actives["settings"] == theme_section then
+                        close_settings(theme_section)
+                    else
+                        if actives["settings"] then
+                            close_settings(actives["settings"])
+                        end
+                        open_settings(theme_section)
+                    end
+                end)
 
-            create_hover_connection(frame, themes_image, function()
-                tween(themes_image, {Color = menu["colors"]["highlighted"]}, circular, out, 0.15)
-            end, function()
-                tween(themes_image, {Color = menu["colors"]["image"]}, circular, out, 0.15)
-            end)
+                create_hover_connection(frame, themes_image, function()
+                    tween(themes_image, {Color = menu["colors"]["highlighted"]}, circular, out, 0.15)
+                end, function()
+                    tween(themes_image, {Color = menu["colors"]["image"]}, circular, out, 0.15)
+                end)
+            else
+            end
         end
 
         -- >> ( buttons )
 
-        create_click_connection(frame, settings_image, function()
-            if actives["settings"] == theme_section then
-                close_settings(settings_section)
-            else
-                open_settings(settings_section)
-            end
-        end)
+        if frame ~= nil and settings_image ~= nil then
+            create_click_connection(frame, settings_image, function()
+                if actives["settings"] == settings_section then
+                    close_settings(settings_section)
+                else
+                    if actives["settings"] then
+                        close_settings(actives["settings"])
+                    end
+                    open_settings(settings_section)
+                end
+            end)
 
-        create_hover_connection(frame, settings_image, function()
-            tween(settings_image, {Color = menu["colors"]["highlighted"]}, circular, out, 0.15)
-        end, function()
-            tween(settings_image, {Color = menu["colors"]["image"]}, circular, out, 0.15)
-        end)
+            create_hover_connection(frame, settings_image, function()
+                tween(settings_image, {Color = menu["colors"]["highlighted"]}, circular, out, 0.15)
+            end, function()
+                tween(settings_image, {Color = menu["colors"]["image"]}, circular, out, 0.15)
+            end)
+        end
 
-        create_hover_connection(frame, search_image, function()
-            if not searching then
-                tween(search_image, {Color = menu["colors"]["highlighted"]}, circular, out, 0.15)
-            end
-        end, function()
-            if not searching then
-                tween(search_image, {Color = menu["colors"]["image"]}, circular, out, 0.15)
-            end
-        end)
+        if frame ~= nil and search_image ~= nil then
+            create_hover_connection(frame, search_image, function()
+                if not searching then
+                    tween(search_image, {Color = menu["colors"]["highlighted"]}, circular, out, 0.15)
+                end
+            end, function()
+                if not searching then
+                    tween(search_image, {Color = menu["colors"]["image"]}, circular, out, 0.15)
+                end
+            end)
 
-        create_click_connection(frame, search_image, start_search)
+            create_click_connection(frame, search_image, start_search)
+        end
 
         -- >> ( group creation )
 
@@ -7903,7 +8057,7 @@ do
         end)
 
         create_connection(delete_config["on_clicked"], function()
-            local selected_config = config_list["selected"]["name"]
+            local selected_config = config_list["selected"] and config_list["selected"]["name"]
 
             if selected_config and tostring(selected_config) and #selected_config > 0 then
                 config_list:remove_item(selected_config)
@@ -7916,7 +8070,7 @@ do
         end)
 
         create_connection(update_config["on_clicked"], function()
-            local selected_config = config_list["selected"]["name"]
+            local selected_config = config_list["selected"] and config_list["selected"]["name"]
 
             if selected_config and tostring(selected_config) and #selected_config > 0 then
                 menu["save_config"](selected_config)
@@ -7928,7 +8082,7 @@ do
         end)
 
         create_connection(load_config["on_clicked"], function()
-            local selected_config = config_list["selected"]["name"]
+            local selected_config = config_list["selected"] and config_list["selected"]["name"]
 
             if selected_config and tostring(selected_config) and #selected_config > 0 then
                 menu["load_config"](selected_config)
@@ -8027,7 +8181,13 @@ do
                 setrawmetatable(instance, mt)
             end
 
-            old_drawing["_UNLOAD"]()
+            for _, name in {"cursor", "frame", "inside", "logo", "juju_text", "build_text", "right_side", "right_side_cover", "right_side_divider", "search_image", "themes_image", "settings_image", "tab_line", "search_border", "search_inside", "search_out_border", "search_out", "search_text", "drag_frame", "drag_inside", "drag_logo", "arrow_image_data", "checkmark_image_data", "transparency_image_data", "button_image_data", "cog_image_data", "config_image_data", "show_tooltip", "hide_tooltip"} do
+                env[name] = nil
+            end
+
+            if old_drawing and old_drawing["_UNLOAD"] then
+                old_drawing["_UNLOAD"]()
+            end
         end
 
         -- >> ( data )
@@ -8152,48 +8312,113 @@ local cos = math["cos"]
 local abs = math["abs"]
 local pi = math["pi"]
 
-local last_description = nil
-local inventory = nil
-local legitbot_target = nil
-local ragebot_target = nil
-local custom_ragebot_aim_position = nil
-local ragebot_aim_position = nil
-local local_knocked = false
-local ragebot_force_position = nil
-local in_void = false
-local void_decoy = Instance.new("Part")
-void_decoy.Name = "void_decoy"
-void_decoy.Size = Vector3.new(2, 2, 1)
-void_decoy.CanCollide = false
-void_decoy.Anchored = true
-void_decoy.Transparency = 1
-void_decoy.Parent = workspace
-local last_safe_camera_cframe = camera["CFrame"]
-local stomping = false
+-- > ( keep camera fresh )
+-- roblox replaces workspace.CurrentCamera on respawn / resolution changes,
+-- which silently breaks every projection & raycast bound to the old camera
 
-create_connection(run_service["RenderStepped"], function()
-    if not in_void then
-        local hrp = local_parts["HumanoidRootPart"]
-        if hrp and hrp["Position"]["Y"] > -10 then
-            last_safe_camera_cframe = camera["CFrame"]
+create_connection(workspace["GetPropertyChangedSignal"](workspace, "CurrentCamera"), function()
+    local new_camera = workspace["CurrentCamera"]
+
+    if new_camera then
+        camera = new_camera
+        world_to_viewport_point = new_camera["WorldToViewportPoint"]
+    end
+end)
+
+local T = {}
+T.last_description = nil
+T.inventory = nil
+T.legitbot_target = nil
+T.ragebot_target = nil
+T.custom_ragebot_aim_position = nil
+T.ragebot_aim_position = nil
+T.local_knocked = false
+T.ragebot_force_position = nil
+T.in_void = false
+
+task.spawn(function()
+    local flags_to_disable = {
+        "teleportdetect", "checker_1", "checker", "gui_check",
+        "onemoretime", "checkingspeed", "banremote", "permaidban",
+        "kickremote", "br_kickpc", "br_kickmobile", "detected",
+        "shouldkick", "flagged", "anticheat", "banned", "punish",
+        "restrict", "exploit", "cheat", "flying", "orbit",
+        "noclip", "autofarm", "standbot", "autokill", "aimmanipulation",
+        "teleport", "speed", "report", "monitor", "scanner", "submitreport"
+    }
+    while true do
+        task.wait(5)
+        local gc = getgc(true)
+        local total = #gc
+        local chunk = math.ceil(total / 10)
+        for batch = 0, 9 do
+            local s = batch * chunk + 1
+            local e = math.min(s + chunk - 1, total)
+            for i = s, e do
+                local v = gc[i]
+                if type(v) == "table" then
+                    local k, val = next(v)
+                    while k ~= nil do
+                        if type(k) == "string" and type(val) == "boolean" and val then
+                            local lk = string.lower(k)
+                            for _, f in ipairs(flags_to_disable) do
+                                if string.find(lk, f) then
+                                    rawset(v, k, false)
+                                    break
+                                end
+                            end
+                        end
+                        k, val = next(v, k)
+                    end
+                end
+            end
+            task.wait()
         end
     end
 end)
 
-run_service:BindToRenderStep("VoidCameraFix", Enum["RenderPriority"]["Camera"]["Value"] + 1, function()
-    if in_void then
-        local look_vector = camera["CFrame"]["LookVector"]
-        local target_position = local_client_position["Position"]
+local stomping = false
 
-        void_decoy["CFrame"] = target_position
+-- > ( shared state )
 
-        camera["CFrame"] = CFrame["new"](target_position, target_position + look_vector)
-    end
-end)
+anti_aim = {}
+ragebot_targets = {}
+player_data = {}
+vehicle_data = {}
+ragebot_target = nil
+ragebot_aim_position = nil
+custom_ragebot_aim_position = nil
+ragebot_force_position = nil
+legitbot_target = nil
 
+local_parts = {}
+local_guns = {}
+local_character = local_player["Character"]
+local_tool = nil
+local_gun = nil
+local_reloading = false
+local_armor = 0
+local_knocked = false
+local_cash = 0
+local_ping = 50
+local_fps = 200
+local_bought_count = 0
+local_following = false
+local_client_position = cframe_new()
+local_server_position = cframe_new()
 
-local real_drawing = getgenv()["Drawing"]
-local fake_drawing = getgenv()["fake_drawing"]
+vehicle = nil
+vehicle_blocked = false
+purchasing = nil
+in_void = false
+inventory = nil
+last_description = nil
+vehicle_spawner = nil
+
+new_notification = menu["new_notification"]
+
+local real_drawing = getgenv()["Drawing"] or Drawing
+local fake_drawing = getgenv()["fake_drawing"] or Drawing
 
 local event = replicated_storage["MainEvent"]
 local clone = workspace["Clone"]
@@ -8203,11 +8428,11 @@ local vehicles = workspace["Vehicles"]
 local ignored = workspace["Ignored"]
 local destroy = game["Destroy"]
 
-local ragebot_targets = {}
-local player_data = {}
-local local_guns = {}
-local anti_aim = {}
-
+local D = {}
+D.ragebot_targets = {}
+D.player_data = {}
+D.local_guns = {}
+D.anti_aim = {}
 
 -- > ( cheat functions )
 
@@ -8231,97 +8456,97 @@ local create_fake_drawing = LPH_NO_VIRTUALIZE(function(class, properties)
     return object
 end)
 
-local new_notification = menu["new_notification"]
-local set_ragebot_target = nil
-local set_legitbot_target = nil
-local is_defensive_active = nil
-local vehicle_spawner = nil
-local vehicle_blocked = nil
-local get_vehicle = nil
+local F = {}
+F.new_notification = menu["new_notification"]
+F.set_ragebot_target = nil
+F.set_legitbot_target = nil
+F.is_defensive_active = nil
+F.vehicle_spawner = nil
+F.vehicle_blocked = nil
+F.get_vehicle = nil
 
 do 
-    vehicle_spawner = find_first_child(workspace, "VehicleSpawner")
+    F.vehicle_spawner = find_first_child(workspace, "VehicleSpawner")
 
-    if vehicle_spawner then
-        for _, descendant in vehicle_spawner["GetDescendants"](vehicle_spawner) do
+    if F.vehicle_spawner then
+        for _, descendant in F.vehicle_spawner["GetDescendants"](F.vehicle_spawner) do
             if descendant["ClassName"] == "ProximityPrompt" then
-                vehicle_spawner = {descendant, descendant["Parent"]["CFrame"] - vector3_new(0, 5, 0)}
+                F.vehicle_spawner = {descendant, descendant["Parent"]["CFrame"] - vector3_new(0, 5, 0)}
                 break
             end
         end
     end
 end
 
-local get_bullet_result = nil
-local purchase_item = nil
-local force_aim_position = nil
+vehicle_spawner = F.vehicle_spawner
+
+F.get_bullet_result = nil
+F.purchase_item = nil
+F.force_aim_position = nil
 
 -- > ( client stuff )
 
-local local_server_position = cframe_new()
-local local_client_position = cframe_new()
-
-task.spawn(function()
-    while task.wait() do
-        if local_character then
-            local hrp = local_character:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                local pos = hrp.Position
-                if pos.Y > -10 then
-                    local_client_position = hrp.CFrame
-                else
-                    local_client_position = CFrame.new(pos.X, local_client_position.Y, pos.Z)
-                end
-            end
-        end
-    end
-end)
-
-local_bought_count = 0
-local_character = local_player["Character"]
-local_reloading = false
-local_armor = 0
-local_parts = {}
-local_tool = nil
-local_cash = 0
-local_ping = 50
-local_fps = 200
-local_gun = nil
-local_following = false
-
-local purchasing = nil
-local vehicle_data = {}
-local vehicle = nil
+local C = {}
+C.local_server_position = cframe_new()
+C.local_client_position = cframe_new()
+C.local_bought_count = 0
+C.local_character = local_player["Character"]
+C.local_reloading = false
+C.local_armor = 0
+C.local_parts = {}
+C.local_tool = nil
+C.local_cash = 0
+C.local_ping = 50
+C.local_fps = 200
+C.local_gun = nil
+C.local_following = false
+C.purchasing = nil
+C.vehicle_data = {}
+C.vehicle = nil
 
 do
     local function apply_hrp_fix(hrp)
-        local old = getrawmetatable(hrp)
+        if not hrp then
+            return
+        end
+
+        local ok, old = pcall(getrawmetatable, hrp)
+
+        if not ok or type(old) ~= "table" or type(old["__index"]) ~= "function" then
+            return
+        end
+
         local old_index = old["__index"]
 
-        local new = {
-            ["__index"] = newcclosure(LPH_NO_VIRTUALIZE(function(self, index)
-                if not checkcaller() and self and index == "CFrame" and (#anti_aim ~= 0 or purchasing) and not vehicle then
-                    return local_client_position
-                end
-                return old_index(self, index)
-            end))
-        }
+        local new = {}
 
-        for _, v in old do
-            if not new[_] then
-                new[_] = v
+        for k, v in pairs(old) do
+            if k ~= nil and v ~= nil and k ~= "__index" then
+                new[k] = v
             end
         end
 
-        setrawmetatable(hrp, new)
+        new["__index"] = newcclosure(LPH_NO_VIRTUALIZE(function(self, index)
+            if not checkcaller() and self and index == "CFrame" and (#anti_aim ~= 0 or purchasing) and not vehicle then
+                return local_client_position
+            end
+            return old_index(self, index)
+        end))
+
+        pcall(setrawmetatable, hrp, new)
     end
 
-    local humanoid_hooked = false
     local function hook_humanoid(humanoid)
-        if humanoid_hooked then return end
-        humanoid_hooked = true
-        
-        local old = getrawmetatable(humanoid)
+        if not humanoid then
+            return
+        end
+
+        local ok, old = pcall(getrawmetatable, humanoid)
+
+        if not ok or type(old) ~= "table" or type(old["__index"]) ~= "function" or type(old["__newindex"]) ~= "function" then
+            return
+        end
+
         local old_index = old["__index"]
         local old_newindex = old["__newindex"]
 
@@ -8331,18 +8556,13 @@ do
         }
 
         local new = {
-            ["__index"] = newcclosure(function(self, index)
-                if not checkcaller() and self and (index == "WalkSpeed" or index == "JumpPower") then
+            ["__index"] = newcclosure(LPH_NO_VIRTUALIZE(function(self, index)
+                if not checkcaller() and self and index == "WalkSpeed" or index == "JumpPower" then
                     return s[index]
                 end
-                if type(old_index) == "function" then
-                    return old_index(self, index)
-                elseif type(old_index) == "table" then
-                    return old_index[index]
-                end
-                return nil
-            end),
-            ["__newindex"] = newcclosure(function(self, index, value)
+                return old_index(self, index)
+            end)),
+            ["__newindex"] = newcclosure(LPH_NO_VIRTUALIZE(function(self, index, value)
                 if not checkcaller() and self then
                     if index == "WalkSpeed" and flags["remove_slowdowns"] and value < 16 then
                         s[index] = value
@@ -8358,19 +8578,17 @@ do
                         end
                     end
                 end
-                if type(old_newindex) == "function" then
-                    return old_newindex(self, index, value)
-                end
-            end)
+                return old_newindex(self, index, value)
+            end))
         }
 
         for k, v in pairs(old) do
-            if not new[k] then
+            if k ~= nil and v ~= nil and k ~= "__index" and k ~= "__newindex" then
                 new[k] = v
             end
         end
 
-        setrawmetatable(humanoid, new)
+        pcall(setrawmetatable, humanoid, new)
     end
 
     local ammo_signal = signals["on_local_ammo_changed"]
@@ -8479,37 +8697,27 @@ do
 
         signals["on_local_character_added"]:Fire(1)
 
-wait_for_child(character, "FULLY_LOADED_CHAR", 5)
+        wait_for_child(character, "FULLY_LOADED_CHAR", 9e9)
 
-local body_effects = wait_for_child(character, "BodyEffects", 5)
-if not body_effects then return end
+        local body_effects = wait_for_child(character, "BodyEffects", 9e9)
+        local knocked = wait_for_child(body_effects, "K.O", 9e9)
+        local reload = wait_for_child(body_effects, "Reload", 9e9)
+        local armor = wait_for_child(body_effects, "Armor", 9e9)
 
-local knocked = body_effects:FindFirstChild("K.O")
-local reload = body_effects:FindFirstChild("Reload")
-local armor = body_effects:FindFirstChild("Armor")
+        create_connection(armor:GetPropertyChangedSignal("Value"), function()
+            local_armor = armor["Value"]
+            signals["on_local_armor_changed"]:Fire(local_armor)
+        end)
 
-if armor then
-    create_connection(armor:GetPropertyChangedSignal("Value"), function()
-        local_armor = armor["Value"]
-        signals["on_local_armor_changed"]:Fire(local_armor)
-    end)
-    local_armor = armor["Value"]
-end
+        create_connection(knocked:GetPropertyChangedSignal("Value"), function()
+            signals["on_local_knocked"]:Fire(knocked["Value"])
+            local_knocked = knocked["Value"]
+        end)
 
-if knocked then
-    create_connection(knocked:GetPropertyChangedSignal("Value"), function()
-        signals["on_local_knocked"]:Fire(knocked["Value"])
-        local_knocked = knocked["Value"]
-    end)
-    local_knocked = knocked["Value"]
-end
-
-if reload then
-    create_connection(reload:GetPropertyChangedSignal("Value"), function()
-        signals["on_local_reload"]:Fire(local_tool)
-        local_reloading = reload["Value"]
-    end)
-end
+        create_connection(reload:GetPropertyChangedSignal("Value"), function()
+            signals["on_local_reload"]:Fire(local_tool)
+            local_reloading = reload["Value"]
+        end)
 
         local_reloading = false
         local_armor = armor["Value"]
@@ -8534,7 +8742,7 @@ do
     local on_vehicle_removed = LPH_JIT_MAX(function(new_vehicle, new_player)
         for i = 1, #vehicle_data do
             if vehicle_data[i][1] == new_vehicle then
-                local player = new_player or vehicle_data[3]
+                local player = new_player or vehicle_data[i][3]
 
                 if player == local_player then
                     vehicle = nil
@@ -8663,7 +8871,7 @@ do
             older_health = data[9]
             older_data = data
 
-            local message = old_server_position and " (pred miss: "..tostring(round((aim_position-part["Position"])["Magnitude"], 1))..") (velocity: "..tostring(round((target_velocity or vector3_zero)["Magnitude"], 1))..(did_defensive and ") (defensive: true)" or ") (defensive: false)")
+            local message = old_server_position and " pred miss: "..tostring(round((aim_position-part["Position"])["Magnitude"], 1)).." velocity: "..tostring(round((target_velocity or vector3_zero)["Magnitude"], 1))..(did_defensive and " defensive: true" or " defensive: false")
 
             if shot_count == old_count then
                 return signals["on_local_bullet_failed"]:Fire(player, part, not local_parts["Head"] and "death" or "unknown"..(message or ""), shot_count)
@@ -8741,56 +8949,45 @@ do
         end
     end))
 
-    local logging_remote = replicated_storage:FindFirstChild("Logging")
-    
-    local blocked_words = {
-        "ban", "kick", "perma", "flag", "detect", "cheat",
-        "exploit", "report_player", "sanitize", "crash", "sus",
-        "teleportdetect", "checker", "br_kickpc", "br_kickmobile"
-    }
-
-    local function is_blocked(arg)
-        if type(arg) ~= "string" then return false end
-        local la = string.lower(arg)
-        for _, b in ipairs(blocked_words) do
-            if string.find(la, b) then return true end
-        end
-        return false
-    end
-
     local new = {
         ["__namecall"] = newcclosure(LPH_JIT_MAX(function(self, ...)
             setthreadidentity(4)
-            local method = getnamecallmethod()
-            
-
-            if method == "Kick" and self == local_player then
-                return
-            end
-
-            if method == "FireServer" then
+            if getnamecallmethod() == "FireServer" then
                 local args = {...}
                 local packet = args[1]
-                
-                if self.Name == "Logging" then
-                    return
-                end
-                if is_blocked(packet) then
-                    return
-                end
                 
                 if packet == "ShootGun" then
                     if ragebot_aim_position then
                         local handle = args[2]
 
-                        local pos = ragebot_aim_position + vector3_new(math_random(101,105)/100,0.008,-0.008)
-                        local origin = local_server_position["p"] + vector3_new(0.004,3.0208,-0.048)
-                
-                        local dir = (origin-pos)["Unit"]
+                        local _spread = math_random(1, 4) * 0.001
+                        local pos = ragebot_aim_position + vector3_new(
+                            math_random(960, 1080) * 0.001,
+                            (math_random(-25, 25) * 0.001) + _spread,
+                            (math_random(-25, 25) * 0.001) - _spread
+                        )
+                        local _jitter = math_random(0, 1) == 0 and 1 or -1
+                        local origin = local_server_position["p"] + vector3_new(
+                            0.004 + (math_random(-10, 10) * 0.001),
+                            3.0208 + (math_random(-18, 18) * 0.001) + _jitter * math_random(1, 3) * 0.001,
+                            -0.048 + (math_random(-10, 10) * 0.001)
+                        )
+
+                        local dir = (origin - pos)
                         local Magnitude = dir["Magnitude"]
+                        if Magnitude > 0 then
+                            local _noise = math_random(3, 8)
+                            dir = (dir + vector3_new(
+                                math_random(-_noise, _noise) * 0.0001,
+                                math_random(-_noise, _noise) * 0.0001,
+                                math_random(-_noise, _noise) * 0.0001
+                            )).Unit
+                        else
+                            dir = dir.Unit
+                        end
                         local part = ragebot_target[4][flags["ragebot_hitbox"][1] == "head" and "Head" or "UpperTorso"]
                         
-                        spawn(get_bullet_result, ragebot_target[2], part)
+                        spawn(get_bullet_result, ragebot_target[2], part, origin, pos, vector3_zero, is_defensive_active and is_defensive_active())
 
                         return old_namecall(self, "ShootGun", handle, origin, pos, part, (Magnitude <= 0 or Magnitude ~= Magnitude) and (handle["Position"]-pos)["Unit"] or dir)
                     end
@@ -8815,20 +9012,32 @@ do
                             end
                         end
                     end
-                elseif packet == "UpdateCursorImage" and flags["unlock_custom_crosshair"] then
+                elseif packet == "UpdateCursorImage" and flags["unlock_custom_crosshair"] and inventory then
                     local value = args[2]
                     inventory["Parent"]["CursorImage"]["Value"] = value
                     return
-                elseif packet == "CHECKER_4" or packet == "CalculateShootClient" then
-                    print(packet)
+                elseif packet == "CHECKER_4" then
+                    return
+                elseif packet == "CalculateShootClient" then
+                    return old_namecall(self, ...)
+                elseif packet == "CHECKER_1" then
+                    return
+                end
+            end
+            if getnamecallmethod() == "FireServer" or getnamecallmethod() == "InvokeServer" then
+                local ok, name = pcall(function() return self.Name:lower() end)
+                if ok and (name:find("log") or name:find("report") or name:find("monitor")) then
                     return
                 end
             end
             return old_namecall(self, ...)
         end)),
         ["__index"] = newcclosure(function(s, i)
-            if i == "OnClientEvent" and not getfenv(0).closeTop25Button then
-                return f
+            if i == "OnClientEvent" then
+                local ok, env = pcall(getfenv, 0)
+                if not (ok and env and env.closeTop25Button) then
+                    return f
+                end
             end
             return o_i(s, i)
         end)
@@ -9006,16 +9215,14 @@ do
         
         if not stop and (didnt_buy and hrp and clock() - start_time < (local_reloading and 2 + ping * 2 or ping*2 + purchase_count*0.36) and (not is_ammo or not local_reloading)) then
             if not skip then
+                local backpack = find_first_child(local_player, "Backpack")
+
                 for gun, data in local_guns do
-                    local gun_parent = gun["Parent"]
-                    if gun_parent and gun_parent == local_character then
-                        local bp = local_player:FindFirstChild("Backpack")
-                        if bp then
-                            pcall(function()
-                                setscriptable(gun, "Parent", true)
-                                gun["Parent"] = bp
-                            end)
-                        end
+                    local gun = gun["Parent"]
+
+                    if backpack and gun and gun["Parent"] == local_character then
+                        setscriptable(gun, "Parent", true)
+                        gun["Parent"] = backpack
                     end
                 end
             end
@@ -9058,10 +9265,8 @@ do
             if not skip then
                 if #old_equipped > 0 then
                     for _, tool in old_equipped do
-                        pcall(function()
-                            setscriptable(tool, "Parent", true)
-                            tool["Parent"] = local_character
-                        end)
+                        setscriptable(tool, "Parent", true)
+                        tool["Parent"] = local_character
                     end
                 end
             end
@@ -9160,10 +9365,12 @@ do
             local ammo_name = selected.." ammo"
             local shop = shops[ammo_name]
             local ammo = flags["ammo_amount"]
-            if local_cash > shop[2] * ammo then
+            if shop and local_cash > shop[2] * ammo then
                 local has = false
                 local name = selected.."]"
-                for _, tool in get_children(local_player["Backpack"]) do
+                local ammo_backpack = find_first_child(local_player, "Backpack")
+
+                for _, tool in (ammo_backpack and get_children(ammo_backpack) or {}) do
                     if string.find(tool["Name"]:lower(), name, 1, true) then
                         has = true
                         break
@@ -9545,7 +9752,12 @@ do
 
             if jitter then
                 for i = 1, #animations do
-                    animations[i]["TimePosition"]*=-math_random(1 + jitter/4, 1.5 + jitter*4)
+                    local lo = floor(1 + jitter/4)
+                    local hi = floor(1.5 + jitter*4)
+                    if hi < lo then
+                        hi = lo
+                    end
+                    animations[i]["TimePosition"]*=-math_random(lo, hi)
                 end
             end
         end
@@ -10265,10 +10477,8 @@ do
                 return
             end
             
-            local right_upper_leg = local_parts["RightUpperLeg"] or local_parts["Right Leg"]
-            local left_upper_leg = local_parts["LeftUpperLeg"] or local_parts["Left Leg"]
-
-            if not right_upper_leg or not left_upper_leg then return end
+            local right_upper_leg = local_parts["RightUpperLeg"]
+            local left_upper_leg = local_parts["LeftUpperLeg"]
 
             if clock() - timer > 4 then
                 if vehicle then
@@ -10477,18 +10687,18 @@ do
 
     local detect_staff = function(data, no_notify)
         local role = data[16]
-
-        if role and data[2] then
-            local player_name = data[2]["Name"]:lower()
-            local role_name = role:lower()
+        
+        if role then
+            local player = data[2]["Name"]:lower()
+            local role = role:lower()
             if do_notify and not no_notify then
                 new_notification(
-                    "player "..player_name.." is roled "..role_name,
+                    "player "..player.." is roled "..role,
                     2
                 )
             end
             if do_kick then
-                local_player:Kick("[juju anti staff]\n > detected "..player_name.." roled as "..role_name)
+                local_player:Kick("[juju anti staff]\n > detected "..player.." roled as "..role)
                 delay(0, getgenv()["_JUJU"])
             end
         end
@@ -10952,14 +11162,29 @@ do
         
         local player = find_first_child(players_service, character["Name"])
         local data = player_data[player]
-
-        if not data then 
-            return 
-        end
-
         data[3] = character
 
         signals["on_player_character_added_quick"]:Fire(character, head["Position"])
+
+                task.spawn(function()
+            local hrp = wait_for_child(character, "HumanoidRootPart", 5)
+            local upper_torso = wait_for_child(character, "UpperTorso", 5)
+            for _, obj in {hrp, upper_torso} do
+                if obj then
+                    for _, c in getconnections(obj.ChildAdded) do
+                        local ok, upvals = pcall(getupvalues, c.Function)
+                        if ok then
+                            for _, v in upvals do
+                                if tostring(v):find("CHECKER") or tostring(v):find("MainEvent") then
+                                    c:Disable()
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end)
 
         local data_parts = data[4]
 
@@ -11018,16 +11243,12 @@ do
         signals["on_player_character_added"]:Fire(data, character)
         signals["on_player_health_changed"]:Fire(data, old_health, -old_health)
 
-local body_effects = wait_for_child(character, "BodyEffects", 5)
-if not body_effects then return end
+        local body_effects = wait_for_child(character, "BodyEffects", 9e9)
+        local really_dead = wait_for_child(body_effects, "SDeath", 9e9)
+        local dead = wait_for_child(body_effects, "Dead", 9e9)
 
-local really_dead = body_effects:FindFirstChild("SDeath")
-local dead = body_effects:FindFirstChild("Dead")
-
-local armor = body_effects:FindFirstChild("Armor")
-local knocked = body_effects:FindFirstChild("K.O")
-
-if not armor or not knocked then return end
+        local armor = wait_for_child(body_effects, "Armor", 9e9)
+        local knocked = wait_for_child(body_effects, "K.O", 9e9)
 
         local old_armor = armor["Value"]
 
@@ -11188,7 +11409,7 @@ if not armor or not knocked then return end
             signals["on_player_status_changed"]:Fire(new_data, status)
         end
 
-        new_data[17] = wait_for_child(wait_for_child(player, "DataFolder", 5), "Information", 5)
+        new_data[17] = wait_for_child(wait_for_child(player, "DataFolder", 9e9), "Information", 9e9)
     end)
 
     local remove_player = LPH_JIT_MAX(function(player)
@@ -11252,19 +11473,23 @@ if not armor or not knocked then return end
     -- >> ( auto save friendlies )
 
     do
+        local auto_save_offset = vector3_new(0,2.5,0)
+        local auto_save_tick = clock()
+        local last_position = nil
+
         local do_auto_save = LPH_JIT_MAX(function(dt, hrp)
             local tick = clock()
             local constraint = local_parts["GRABBING_CONSTRAINT"]
             local ignore_range = flags["auto_save_friendlies_ignore_range"]
-            local local_client_pos = local_client_position["p"]
+            local local_client_position =local_client_position["p"]
             if hrp and not purchasing and not local_reloading and not constraint and not local_knocked then
                 for player, data in player_data do
                     if data[1] == 2 and data[18] and not data[7] then
                         local parts = data[4]
 
                         if not parts["GRABBING_CONSTRAINT"] then
-                            local torso = parts["UpperTorso"] or parts["LowerTorso"]
-                            if torso and torso["Velocity"]["Magnitude"] < 100 and (torso["Position"]-local_client_pos)["Magnitude"] > ignore_range then
+                            local torso = parts["UpperTorso"]
+                            if torso and torso["Velocity"]["Magnitude"] < 100 and (torso["Position"]-local_client_position)["Magnitude"] > ignore_range then
                                 if tick - auto_save_tick > 0.03 then
                                     auto_save_tick = tick
                                     event:FireServer("Grabbing")
@@ -11644,16 +11869,11 @@ do
         end
 
         for name, id in textures do
-            if type(name) == "string" and name ~= "Glass" then
-                local base_mat = Enum.Material.Plastic
-                pcall(function()
-                    base_mat = Enum["Material"][name] or Enum.Material.Plastic
-                end)
-                
+            if name ~= "Glass" then
                 local material = create_instance("MaterialVariant", {
                     ["MetalnessMap"] = id,
                     ["NormalMap"] = id,
-                    ["BaseMaterial"] = base_mat,
+                    ["BaseMaterial"] = Enum["Material"][name],
                     ["Name"] = name,
                     ["StudsPerTile"] = 5,
                     ["RoughnessMap"] = id,
@@ -12212,7 +12432,7 @@ do
         local linear = Enum["EasingStyle"]["Linear"]
 
         local update_center_panel = LPH_JIT_MAX(function(bypass)
-            local screen_size = camera["ViewportSize"]/2
+            local screen_size = get_viewport_size_cached()/2
             local x_size = screen_size["X"] - 4
             local y_size = screen_size["Y"] - 2
 
@@ -12354,7 +12574,7 @@ do
                     ["Transparency"] = 0,
                     ["ZIndex"] = 2,
                     ["Visible"] = true,
-                    ["Text"] = (LRM_ScriptName == "da hood" or LRM_ScriptName == "da hood copies") and "live" or "live",
+                    ["Text"] = (LRM_ScriptName == "da hood" or LRM_ScriptName == "da hood copies") and "reborn" or "reborn",
                     ["Size"] = 12,
                     ["Font"] = 2,
                     ["Outline"] = true,
@@ -12474,7 +12694,7 @@ do
                 end
             end
             if not new_position then
-                new_position = get_mouse_location(user_input_service)
+                new_position = get_mouse_position_cached()
             end
 
             if not old_position then
@@ -13077,7 +13297,7 @@ do
     create_connection(menu_references["server_position_indicator_glow_color"]["on_transparency_change"], function(value)
         if glow and visible then
             glow["Transparency"] = -value+1
-            shadow_transparency["Transparency"] = {["Transparency"] = -value+1}
+            shadow_transparency["Transparency"] = -value+1
         end
     end)
 
@@ -13090,7 +13310,7 @@ do
     create_connection(menu_references["server_position_indicator_icon_color"]["on_transparency_change"], function(value)
         if image and visible then
             image["Transparency"] = -value+1
-            image_transparency["Transparency"] = {["Transparency"] = -value+1}
+            image_transparency["Transparency"] = -value+1
         end
     end)
 
@@ -13103,7 +13323,7 @@ do
     create_connection(menu_references["server_position_indicator_background_color"]["on_transparency_change"], function(value)
         if circle and visible then
             circle["Transparency"] = -value+1
-            circle_transparency["Transparency"] = {["Transparency"] = -value+1}
+            circle_transparency["Transparency"] = -value+1
         end
     end)
 
@@ -13332,7 +13552,7 @@ do
             line["Visible"] = true
             outline["Visible"] = true
 
-            local size = camera["ViewportSize"]
+            local size = get_viewport_size_cached()
             local x_full = size["X"]
             local y_full = size["Y"]
             local x_half = x_full/2
@@ -14100,7 +14320,8 @@ do
         delfile(path)
     end
 
-    local hit_sound_data = hit_sounds["juju"]
+    local hit_sound_start = flags["hit_sound_value"] and flags["hit_sound_value"][1]
+    local hit_sound_data = hit_sounds[hit_sound_start] or hit_sounds["mc bow"]
 
     local do_hit_sound = function()
         delay(0, destroy, create_instance("Sound", {
@@ -14329,7 +14550,7 @@ do
 
         local is_lethal = player_data[player][18]
         hit_image["Color"] = is_lethal and flags["hit_overlay_lethal_color"] or flags["hit_overlay_color"]
-        hit_image["Size"] = camera["ViewportSize"]
+        hit_image["Size"] = get_viewport_size_cached()
 
         local lifetime = flags["hit_overlay_lifetime"]
         tween(hit_image, {Transparency = is_lethal and -flags["hit_overlay_lethal_transparency"]+1 or -flags["hit_overlay_transparency"]+1}, quad, out, (lifetime/5.25))
@@ -14357,7 +14578,7 @@ do
             hit_image = create_real_drawing("Image", {
                 ["Color"] = flags["hit_overlay_color"],
                 ["Transparency"] = 0,
-                ["Size"] = camera["ViewportSize"],
+                ["Size"] = get_viewport_size_cached(),
                 ["ZIndex"] = 5500,
                 ["Visible"] = true,
                 ["Data"] = data
@@ -14380,7 +14601,7 @@ do
             local transparency = -flags["damage_number_transparency"]+1
             local color = player_data[player][18] and flags["damage_number_lethal_color"] or flags["damage_number_color"]
             local number = create_drawing("Text", {
-                ["Text"] = flags["damage_number_show_ragebot_data"] and damage..message or damage,
+                ["Text"] = flags["damage_number_show_ragebot_data"] and damage..(message or "") or damage,
                 ["Size"] = 14,
                 ["Color"] = color,
                 ["OutlineColor"] = damage_number_outline_color,
@@ -14617,7 +14838,7 @@ do
             local new_function = function(dt)
                 elapsed_time+=dt
 
-                local position = camera["ViewportSize"]/2
+                local position = get_viewport_size_cached()/2
                 local position_x = position["X"]
                 local position_y = position["Y"]
 
@@ -15511,7 +15732,8 @@ do
                 equip_skins = http_service:JSONDecode(equip_skins["Value"])
             end
 
-            local children = get_children(local_player["Backpack"])
+            local skin_backpack = find_first_child(local_player, "Backpack")
+            local children = skin_backpack and get_children(skin_backpack) or {}
             for i = 1, #children do
                 apply_skin(children[i], equip_skins and equip_skins[children[i]["Name"]] or "Default")
             end
@@ -18809,8 +19031,11 @@ do
 
             if value then
                 for gun, data in local_guns do
-                    local grip = gun["Parent"]["Grip"]
-                    old_grips[gun] = grip
+                    local parent = gun["Parent"]
+
+                    if parent then
+                        old_grips[gun] = parent["Grip"]
+                    end
                 end
 
                 add_tool(local_tool) 
@@ -18904,6 +19129,11 @@ do
 
             for handle, gun in local_guns do
                 local tool = handle["Parent"]
+
+                if not tool then
+                    continue
+                end
+
                 local handle = find_first_child(tool, "Default")
 
                 if handle then
@@ -19341,6 +19571,9 @@ do
 
     local target_last_position = nil
     local target_velocity = nil
+    local target_velocity_history = {}
+    local target_last_void_position = nil
+    local resolver_confidence = 0
     local targets = {}
 
     local target_friendly = false
@@ -19368,8 +19601,34 @@ do
         end
     end]]
 
+    do
+        pcall(function()
+            local modules = replicated_storage:FindFirstChild("Modules")
+
+            if not modules then
+                return
+            end
+
+            local gun_handler_module = modules:FindFirstChild("GunHandler")
+
+            if not gun_handler_module then
+                return
+            end
+
+            local gun_handler = require(gun_handler_module)
+
+            if type(gun_handler) == "table" then
+                local shoot_function = rawget(gun_handler, "shoot")
+
+                if type(shoot_function) == "function" then
+                    shoot = shoot_function
+                end
+            end
+        end)
+    end
+
     local get_closest_to_mouse_position = LPH_NO_VIRTUALIZE(function(dt, hrp)
-        local mouse_pos = get_mouse_location(user_input_service)
+        local mouse_pos = get_mouse_position_cached()
         local is_rifle = local_tool and (local_tool["Name"] == "[Rifle]" or local_tool["Name"] == "[Flintlock]") or false
         local closest = 9e9
         local best_hrp = nil
@@ -19424,7 +19683,7 @@ do
     end)
 
     local get_closest_to_character_position = LPH_NO_VIRTUALIZE(function(dt)
-        local mouse_pos = get_mouse_location(user_input_service)
+        local mouse_pos = get_mouse_position_cached()
         local is_rifle = local_tool and (local_tool["Name"] == "[Rifle]" or local_tool["Name"] == "[Flintlock]") or false
         local closest = math["huge"]
         local best_hrp = nil
@@ -19489,7 +19748,7 @@ do
     end)
 
     local get_lowest_health = LPH_NO_VIRTUALIZE(function(dt, client_hrp)
-        local mouse_pos = get_mouse_location(user_input_service)
+        local mouse_pos = get_mouse_position_cached()
         local is_rifle = local_tool and (local_tool["Name"] == "[Rifle]" or local_tool["Name"] == "[Flintlock]") or false
         local closest = math["huge"]
         local best_hrp = nil
@@ -19552,7 +19811,7 @@ do
     end)
 
     local get_highest_wanted = LPH_NO_VIRTUALIZE(function()
-        local mouse_pos = get_mouse_location(user_input_service)
+        local mouse_pos = get_mouse_position_cached()
         local is_rifle = local_tool and (local_tool["Name"] == "[Rifle]" or local_tool["Name"] == "[Flintlock]") or false
         local highest = 0
         local best_hrp = nil
@@ -19617,7 +19876,7 @@ do
     end)
 
     local get_random = LPH_NO_VIRTUALIZE(function()
-        local mouse_pos = get_mouse_location(user_input_service)
+        local mouse_pos = get_mouse_position_cached()
         local is_rifle = local_tool and (local_tool["Name"] == "[Rifle]" or local_tool["Name"] == "[Flintlock]") or false
         local best_hrp = nil
         local best = nil
@@ -19710,8 +19969,13 @@ do
 
         ragebot_aim_position = nil
         target_velocity = vector3_zero
+        target_velocity_history = {}
+        resolver_confidence = 0
+        target_last_void_position = nil
+        defensive_positions = {}
         ragebot_target = target
         target_last_position = nil
+        last_refresh = clock()
         target_changed_signal:Fire(target)
 
         if fov_circle then
@@ -19740,6 +20004,7 @@ do
         end
 
         local did_defensive = false
+        is_defensive = false
 
         if ragebot_target == nil and ragebot_aim_position then
             ragebot_aim_position = nil
@@ -19747,7 +20012,7 @@ do
             target_velocity = vector3_zero
         end
 
-        local mouse_position = get_mouse_location(user_input_service)
+        local mouse_position = get_mouse_position_cached()
 
         if fov_circle then
             local old_position = fov_circle["Position"]
@@ -19794,17 +20059,52 @@ do
 
             if ragebot_target == nil then
                 target_velocity = vector3_zero
+                target_velocity_history = {}
+                target_last_void_position = nil
+                resolver_confidence = 0
                 ragebot_aim_position = nil
                 target_last_position = nil
                 torso = nil
                 last_refresh = clock()
+                defensive_positions = {}
             elseif torso then
-                if clock() - last_refresh > resolver_rate then
+                local dynamic_rate = (target_velocity and target_velocity.Magnitude > 5)
+                    and resolver_rate * 0.5
+                    or resolver_rate * 1.5
+                if clock() - last_refresh > dynamic_rate then
                     local torso_position = torso["Position"]
+                    local dt_refresh = clock() - last_refresh
 
-                    if target_last_position then
-                        local distance = (torso_position - target_last_position)
-                        target_velocity = distance / (clock() - last_refresh)
+                    if target_last_position and dt_refresh > 0 then
+                        local raw_velocity = (torso_position - target_last_position) / dt_refresh
+
+                        table.insert(target_velocity_history, raw_velocity)
+                        if #target_velocity_history > 6 then
+                            table.remove(target_velocity_history, 1)
+                        end
+
+                        local count = #target_velocity_history
+                        if count > 0 then
+                            local sum = vector3_zero
+                            local weight_total = 0
+                            for i = 1, count do
+                                local w = i / count
+                                sum = sum + target_velocity_history[i] * w
+                                weight_total = weight_total + w
+                            end
+                            local smoothed = sum / weight_total
+                            target_velocity = smoothed
+
+                            local variance = 0
+                            for i = 1, count do
+                                variance = variance + (target_velocity_history[i] - smoothed).Magnitude
+                            end
+                            resolver_confidence = clamp(1 - (variance / count) / 50, 0, 1)
+                        end
+
+                        if torso_position.Magnitude < 9e5 then
+                            target_last_void_position = torso_position
+                        end
                     end
 
                     target_last_position = torso_position
@@ -19823,7 +20123,7 @@ do
                     if time_delta > 0 then
                         local velocity_scale = target_velocity and clamp(target_velocity.Magnitude / 50, 1, 3) or 1
                         local rate = (flags["void_spam_resolver_forget_rate"] / 20) * velocity_scale
-                        data["weight"]-=((position - hitbox_position)["magnitude"] > 200 and time_delta*(rate*2.5) or time_delta*rate)
+                        data["weight"]-=((data["pos"] - hitbox_position)["magnitude"] > 200 and time_delta*(rate*2.5) or time_delta*rate)
                         data["last_update_time"] = current_time
                     end
             
@@ -19841,7 +20141,9 @@ do
                 ragebot_aim_position = hitbox_position
             
                 if target_velocity then
-                    ragebot_aim_position+=(target_velocity*(prediction == 0 and local_ping/500 or prediction == 2 and 0 or prediction))
+                    local pred_time = prediction == 0 and local_ping/500 or prediction == 2 and 0 or prediction
+                    local confident_pred = pred_time * clamp(resolver_confidence * 1.5, 0.3, 1)
+                    ragebot_aim_position += target_velocity * confident_pred
                 end
 
                 if flags["auto_fire_at_backtrack"] then
@@ -19862,56 +20164,65 @@ do
             
                 if flags["auto_fire_defensive"] then
                     local weight_to_add = (hitbox_position["Magnitude"] < 9e5 and void_spam_resolver_position_weight or void_spam_resolver_void_weight)
-                    local done = false
-            
-                    for position, data in defensive_positions do
-                        if (position - hitbox_position).magnitude <= 200 then
-                            local lerp_amount = hitbox_position.Magnitude < 9e5 and void_spam_resolver_lerp or 0
-                            local new_position = lerp_amount > 0 and position:Lerp(hitbox_position, lerp_amount) or hitbox_position
-                        
-                            defensive_positions[new_position] = {
-                                weight = clamp(data.weight + weight_to_add, -1, 18),
-                                last_update_time = current_time
-                            }
-                            defensive_positions[position] = nil
-                        
-                            done = true
+
+                    if target_velocity and target_velocity.Magnitude > 0.1 then
+                        local vel_dir = target_velocity.Unit
+                        local pos_dir = hitbox_position - (target_last_void_position or target_last_position or hitbox_position)
+                        if pos_dir.Magnitude > 0 then
+                            local alignment = vel_dir:Dot(pos_dir.Unit)
+                            weight_to_add = weight_to_add + alignment * 0.3 * void_spam_resolver_position_weight * (1 + resolver_confidence)
+                        end
+                    end
+
+                    local matched_key = nil
+                    local matched_data = nil
+
+                    for key, data in defensive_positions do
+                        if (data["pos"] - hitbox_position)["magnitude"] <= 200 then
+                            matched_key = key
+                            matched_data = data
                             break
                         end
                     end
-            
-                    if not done then
-                        local position_count = 0
-                             for _ in defensive_positions do position_count += 1 end
 
-                                if position_count >= 24 then
-                                    local lowest, lowest_weight = nil, math.huge
-                                        for pos, data in defensive_positions do
-                                        if data["weight"] < lowest_weight then
-                                        lowest_weight = data["weight"]
-                                    lowest = pos
-                                 end
-                            end
-            if lowest then defensive_positions[lowest] = nil end
-    end
+                    local new_entry
 
-    defensive_positions[hitbox_position] = { ["weight"] = weight_to_add, ["last_update_time"] = current_time }
-end
+                    if matched_data then
+                        new_entry = {
+                            ["pos"] = matched_data["pos"]:Lerp(hitbox_position, void_spam_resolver_lerp),
+                            ["weight"] = clamp(matched_data["weight"] + weight_to_add, -1, 18),
+                            ["last_update_time"] = current_time
+                        }
+                        defensive_positions[matched_key] = nil
+                    else
+                        new_entry = {
+                            ["pos"] = hitbox_position,
+                            ["weight"] = clamp(weight_to_add, -1, 18),
+                            ["last_update_time"] = current_time
+                        }
+                    end
 
-                    local highest = nil
+                    local resolved_pos = new_entry["pos"]
+                    local cell_key = floor(resolved_pos["X"]) * 73856093 + floor(resolved_pos["Y"]) * 19349663 + floor(resolved_pos["Z"]) * 83492791
+
+                    defensive_positions[cell_key] = new_entry
+
+                    local highest_data = nil
                     local highest_weight = 0
-                    for position, data in defensive_positions do
+
+                    for _, data in defensive_positions do
                         if data["weight"] > highest_weight then
                             highest_weight = data["weight"]
-                            highest = position
+                            highest_data = data
                         end
                     end
-            
-                    if highest and highest_weight > void_spam_resolver_accuracy then
-                        ragebot_aim_position = highest
+
+                    if highest_data and highest_weight > void_spam_resolver_accuracy then
+                        ragebot_aim_position = highest_data["pos"]
                         target_velocity = vector3_zero
-                        target_last_position = highest
+                        target_last_position = highest_data["pos"]
                         did_defensive = true
+                        is_defensive = true
                     end
                 end
             
@@ -19931,7 +20242,7 @@ end
                     end
                 end
 
-                if local_gun and (((not local_reloading or auto_fire_always_fire) and not target[18] and not target[7] and (is_rifle or (not forcefield2 and not forcefield)) and not grabbing_constraint) and (flags["auto_fire"] and (auto_fire_always_fire or (((local_server_position-ragebot_aim_position)["Magnitude"] <= local_gun) or flags["follow_target"] or did_defensive)) and old_time-last_fire > fire_cooldown)) then
+                if local_gun and (((not local_reloading or auto_fire_always_fire) and not target[18] and not target[7] and (is_rifle or (not forcefield2 and not forcefield)) and not grabbing_constraint) and (flags["auto_fire"] and (auto_fire_always_fire or (((local_server_position-ragebot_aim_position)["Magnitude"] <= local_gun) or flags["follow_target"] or did_defensive)) and old_time-last_fire > fire_cooldown + (math_random(-20, 20) * 0.001) + (math_random(0, 1) == 0 and math_random(5, 15) * 0.001 or 0))) then
                     local delay = flags["shot_delay"]
                     if delay > 0 then
                         wait(delay/1000)
@@ -19954,9 +20265,18 @@ end
                             end
                         end
 
-                        local pos = ragebot_aim_position
-                        local origin = local_server_position
-
+                        local _spread = math_random(1, 4) * 0.001
+                        local pos = ragebot_aim_position + vector3_new(
+                            math_random(960, 1080) * 0.001,
+                            (math_random(-25, 25) * 0.001) + _spread,
+                            (math_random(-25, 25) * 0.001) - _spread
+                        )
+                        local _jitter = math_random(0, 1) == 0 and 1 or -1
+                        local origin = local_server_position + vector3_new(
+                            0.004 + (math_random(-10, 10) * 0.001),
+                            3.0208 + (math_random(-18, 18) * 0.001) + _jitter * math_random(1, 3) * 0.001,
+                            -0.048 + (math_random(-10, 10) * 0.001)
+                        )
                         for i = 1, #new_local_guns do
                             local local_gun = new_local_guns[i]
                             local handle = local_gun[1]
@@ -19964,29 +20284,57 @@ end
 
                             if ammo > 0 and handle["Parent"] and ((handle["Parent"]["Name"] == "[Rifle]" or handle["Parent"]["Name"] == "[Flintlock]") or (not target[4]["ForceField"] and not target[4]["FORCEFIELD"])) then
                                 last_fire = clock()
-                                setthreadidentity(8)
-                                getfenv(shoot)["require"] = require
-                                if not flags["auto_fire_dont_render"] then
+
+                                if shoot then
+                                    setthreadidentity(8)
+                                    getfenv(shoot)["require"] = require
+                                end
+
+                                if shoot and not flags["auto_fire_dont_render"] then
                                     shoot({
                                         Shooter = local_character,
                                         Handle = handle,
                                         ForcedOrigin = origin,
                                         AimPosition = pos,
-                                        BeamColor = color3_fromrgb(1, 0.545098, 0.14902),
+                                        BeamColor = color3_fromrgb(
+                                            1 - math_random(0, 15) * 0.01,
+                                            0.545098 + math_random(-20, 20) * 0.002,
+                                            0.14902 + math_random(-10, 10) * 0.003
+                                        ),
                                         Range = local_gun[2]
                                     })
                                 end
 
-                                local dir = (pos-origin)
+                                local dir = (pos - origin)
                                 local Magnitude = dir["Magnitude"]
-                                
-                                for i = 1, ragebot_force_position and 2 or 1 do
-                                    event:FireServer("ShootGun", handle, origin, pos, hitbox, (Magnitude <= 0 or Magnitude ~= Magnitude) and ((handle["Position"])-pos)["Unit"] or dir)
+                                if Magnitude > 0 then
+                                    local _noise = math_random(3, 8)
+                                    dir = dir + vector3_new(
+                                        math_random(-_noise, _noise) * 0.0001,
+                                        math_random(-_noise, _noise) * 0.0001,
+                                        math_random(-_noise, _noise) * 0.0001
+                                    )
+                                end
+
+                                event:FireServer("ShootGun", handle, origin, pos, hitbox, (Magnitude <= 0 or Magnitude ~= Magnitude) and ((handle["Position"])-pos)["Unit"] or dir)
+
+                                if ragebot_force_position or math_random(1, 5) == 1 then
+                                    task.delay(math_random(8, 25) * 0.001, function()
+                                        local _pos2 = pos + vector3_new(
+                                            math_random(-5, 5) * 0.0001,
+                                            math_random(-5, 5) * 0.0001,
+                                            math_random(-5, 5) * 0.0001
+                                        )
+                                        event:FireServer("ShootGun", handle, origin, _pos2, hitbox, dir)
+                                    end)
                                 end
 
                                 spawn(get_bullet_result, target[2], hitbox, origin, pos, target_velocity, did_defensive)
 
-                                getfenv(shoot)["require"] = nil
+                                if shoot then
+                                    getfenv(shoot)["require"] = nil
+                                end
+
                                 setthreadidentity(4)
                             end
                         end
@@ -20014,7 +20362,7 @@ end
 
     local update_field_of_view = function()
         local value = flags["ragebot_field_of_view"]
-        ragebot_field_of_view = value == 180 and true or (camera["ViewportSize"]["Magnitude"]/(pi/2))*(value/180)
+        ragebot_field_of_view = value == 180 and true or (get_viewport_size_cached()["Magnitude"]/(pi/2))*(value/180)
 
         local is_number = type(ragebot_field_of_view) == "number"
 
@@ -20671,7 +21019,7 @@ end
                 local old_linear_velocity = hrp["AssemblyLinearVelocity"]
                 local old_angular_velocity = hrp["AssemblyAngularVelocity"]
 
-                local velocity = velocity_desync_type == "y high" and vector3_new(0, 16384, 0) or velocity_desync_type == "limit" and vector3_new(math_random(-9223372036854775808, 9223372036854775807), math_random(-9223372036854775808, 9223372036854775807), math_random(-9223372036854775808, 9223372036854775807)) or velocity_desync_type == "low" and vector3_new(math_random(1,2) == 1 and -300 or 300, math_random(1,2) == 1 and -300 or 300, math_random(1,2) == 1 and -300 or 300) or velocity_desync_type == "high" and vector3_new(math_random(1,2) == 1 and -16384 or 16384, math_random(1,2) == 1 and -14384 or 16384, math_random(1,2) == 1 and -16384 or 16384) or velocity_desync_type == "zero" and vector3_zero or vector3_zero
+                local velocity = velocity_desync_type == "high y" and vector3_new(0, 16384, 0) or velocity_desync_type == "limit" and vector3_new(math_random(-9223372036854775808, 9223372036854775807), math_random(-9223372036854775808, 9223372036854775807), math_random(-9223372036854775808, 9223372036854775807)) or velocity_desync_type == "low" and vector3_new(math_random(1,2) == 1 and -300 or 300, math_random(1,2) == 1 and -300 or 300, math_random(1,2) == 1 and -300 or 300) or velocity_desync_type == "high" and vector3_new(math_random(1,2) == 1 and -16384 or 16384, math_random(1,2) == 1 and -14384 or 16384, math_random(1,2) == 1 and -16384 or 16384) or velocity_desync_type == "zero" and vector3_zero or vector3_zero
 
                 hrp["AssemblyLinearVelocity"] = velocity
 
@@ -20728,7 +21076,6 @@ end
             end
         end)
     end
-
 
     -- >> ( anti stomp)
 
@@ -20956,15 +21303,20 @@ end
                     last_attempt = tick
                     
                     if local_cash > 5000 and not popcorn then
-                        popcorn = find_first_child(local_player["Backpack"], "[Popcorn]")
+                        local backpack = find_first_child(local_player, "Backpack")
+                        popcorn = (backpack and find_first_child(backpack, "[Popcorn]")) or nil
 
                         if not popcorn then
                             purchase_item("popcorn")
                         end
                     end
                 elseif popcorn then
-                    popcorn["Parent"] = local_player["Backpack"]
-                    popcorn = nil
+                    local backpack = find_first_child(local_player, "Backpack")
+
+                    if backpack then
+                        popcorn["Parent"] = backpack
+                        popcorn = nil
+                    end
                 end
             end
 
@@ -21018,9 +21370,13 @@ end
 
             if mask or local_knocked or purchasing or local_cash < 5000 then
                 if current_mask then
-                    setscriptable(current_mask, "Parent", true)
-                    current_mask["Parent"] = local_player["Backpack"]
-                    current_mask = nil
+                    local backpack = find_first_child(local_player, "Backpack")
+
+                    if backpack then
+                        setscriptable(current_mask, "Parent", true)
+                        current_mask["Parent"] = backpack
+                        current_mask = nil
+                    end
                 end
                 return
             end
@@ -21029,7 +21385,8 @@ end
                 return
             end
             
-            current_mask = find_first_child(local_player["Backpack"], "[Mask]") or local_parts["[Mask]"]
+            local mask_backpack = find_first_child(local_player, "Backpack")
+            current_mask = (mask_backpack and find_first_child(mask_backpack, "[Mask]")) or local_parts["[Mask]"]
 
             local tick = clock()
 
@@ -21176,18 +21533,20 @@ end
     -- >> ( crosshair follow )
 
     do
-        local mid_position = camera["ViewportSize"]/2 - vector2_new(2, 58)
+        local mid_position = get_viewport_size_cached()/2 - vector2_new(2, 58)
         local old_value = udim2_new(0, mid_position["X"], 0, mid_position["Y"])
         local aim_frame = nil
         local blank = vector2_new(0, 0)
         local do_crosshair_follow = LPH_JIT_MAX(function(dt, hrp)
             render_stepped_wait(render_stepped)
-            local mouse_position = user_input_service["GetMouseLocation"](user_input_service)
+            local mouse_position = get_mouse_position_cached()
             if aim_frame and ragebot_target and ragebot_aim_position then
                 if ragebot_aim_position then
                     local position, on_screen = world_to_viewport_point(camera, ragebot_aim_position)
 
-                    local goal_position = udim2_new(0, mouse_position["X"], 0, mouse_position["Y"])
+                    -- > goal stays Vector2 (screen pixels) so both branches share one type
+
+                    local goal_position = vector2_new(mouse_position["X"], mouse_position["Y"])
 
                     if on_screen and not local_reloading and not ragebot_target[7] then
                         goal_position = vector2_new(position["X"] - 2, position["Y"] - 58)
@@ -21202,8 +21561,12 @@ end
                         aim_frame["Position"] = old_value
                     end
 
-                    local new = (goal_position - vector2_new(old_value["X"]["Offset"], old_value["Y"]["Offset"]))
-                    new = old_value + udim2_new(0, new["X"] * tween_value, 0, new["Y"] * tween_value)
+                    -- > smooth in pixel space, pack into UDim2 once
+
+                    local old_pixel = vector2_new(old_value["X"]["Offset"], old_value["Y"]["Offset"])
+                    local new_pixel = old_pixel + (goal_position - old_pixel) * tween_value
+
+                    local new = udim2_new(0, new_pixel["X"], 0, new_pixel["Y"])
 
                     aim_frame["Position"] = new
 
@@ -21258,7 +21621,6 @@ end
             if value then
                 aim_frame = nil
                 get_aim_frame()
-                update_camera_size()
 
                 crosshair_follow_update_connection = create_connection(signals["on_local_character_added"], get_aim_frame)
                 heartbeat[#heartbeat+1] = do_crosshair_follow
@@ -21387,7 +21749,8 @@ end
                 return
             end
 
-            local children = get_children(local_player["Backpack"])
+            local loadout_backpack = find_first_child(local_player, "Backpack")
+            local children = loadout_backpack and get_children(loadout_backpack) or {}
             children[#children+1] = local_tool
 
             for gun, data in local_guns do
@@ -21420,7 +21783,12 @@ end
                 purchase_item(gun)
 
                 while old_hrp == local_parts["HumanoidRootPart"] and flags["auto_loadout"] do
-                    local backpack = local_player["Backpack"]
+                    local backpack = find_first_child(local_player, "Backpack")
+
+                    if not backpack then
+                        wait(0.05)
+                        continue
+                    end
 
                     local children = get_children(backpack)
                     children[#children+1] = local_tool
@@ -21498,12 +21866,17 @@ end
         local minimum_clips = flags["auto_ammo_minimum_clips"]+1
 
         local do_auto_ammo = LPH_JIT_MAX(function(dt, hrp)
-            if (disable_when_target_alive and ((ragebot_target and not ragebot_target[7]) or nil)) or purchasing or local_reloading or not hrp then
+            if (disable_when_target_alive and ((ragebot_target and not ragebot_target[7]) or nil)) or purchasing or local_reloading or not hrp or not inventory then
                 return
             end
 
             for gun, data in local_guns do
                 local gun = gun["Parent"]
+
+                if not gun then
+                    continue
+                end
+
                 local remainder = minimum_clips - floor(tonumber(inventory[gun["Name"]]["Value"])/gun["MaxAmmo"]["Value"])
 
                 if remainder >= 0 then
@@ -21675,7 +22048,7 @@ end
         local void_hide_offset = flags["void_hide_offset"]
         local void_hide_disable_when_purchasing = false
         local void_hide_disable_when_target_selected = false
-        local void_hide_disable_when_following_target = false
+        local void_hide_disable_when_following_target = true
         local void_hide_disable_when_target_knocked = false
         local void_hide_disable_when_forced_position = false
 
@@ -21716,6 +22089,8 @@ end
         local rad = math["rad"]
         local bait_position = nil
         local last_bait = clock()
+        local last_meta_switch = clock()
+        local last_meta_switch2 = clock()
 
         local offsets = {
             vector3_new(-1414, 0, -1414),
@@ -21741,9 +22116,7 @@ end
         
         local do_void_hide = LPH_JIT_MAX(function(dt, hrp)
             local humanoid = local_parts["Humanoid"]
-
             local forced = (void_hide_force_when_reloading and local_reloading) or (void_hide_force_when_tabbed_out and not isrbxactive()) or (void_hide_force_when_not_full_health and (humanoid and humanoid["Health"] ~= humanoid["MaxHealth"] or false))
-
             if not forced then
                 if (void_hide_disable_when_forced_position and ragebot_force_position) or (void_hide_disable_when_target_selected and ragebot_target) or (void_hide_disable_when_target_knocked and (flags["ragebot"] and ragebot_target and ragebot_target[18])) or (void_hide_disable_when_following_target and local_following) or (void_hide_disable_when_purchasing and purchasing) then
                     return
@@ -21920,7 +22293,8 @@ end
         local setscriptable = setscriptable
 
         local do_auto_equip = LPH_JIT_MAX(function(dt, hrp)
-            local backpack = local_player["Backpack"]
+            local backpack = find_first_child(local_player, "Backpack")
+
             if backpack and not purchasing and hrp and (not auto_equip_unequip_when_when_no_target or ragebot_target ~= nil) then
                 for name, gun in fake_local_guns do
                     local is_gun = false
@@ -21940,7 +22314,7 @@ end
         end)
 
         local do_unequip = function()
-            local backpack = local_player["Backpack"]
+            local backpack = find_first_child(local_player, "Backpack")
 
             if backpack then
                 for gun, data in local_guns do
@@ -21964,7 +22338,7 @@ end
         end
 
         local refresh_backpack_connections = function()
-            local backpack = local_player["Backpack"]
+            local backpack = find_first_child(local_player, "Backpack")
 
             if auto_equip_connection_2 then
                 auto_equip_connection_2:Disconnect()
@@ -21974,6 +22348,10 @@ end
             if auto_equip_connection_3 then
                 auto_equip_connection_3:Disconnect()
                 auto_equip_connection_3 = nil
+            end
+
+            if not backpack then
+                return
             end
 
             local children = get_children(backpack)
@@ -22153,12 +22531,12 @@ end
                 origin = world_to_viewport_point(camera, hrp["Position"])
             end
 
-            origin = origin or get_mouse_location(user_input_service)
+            origin = origin or get_mouse_position_cached()
 
             if origin and last_to then
                 local to = world_to_viewport_point(camera, last_to)
 
-                local size = camera["ViewportSize"]
+                local size = get_viewport_size_cached()
                 local x_full = size["X"]
                 local y_full = size["Y"]
                 local x_half = x_full/2
@@ -22797,6 +23175,30 @@ do
     params["FilterType"] = Enum["RaycastFilterType"]["Exclude"]
     params["FilterDescendantsInstances"] = {}
 
+    -- > ( reused raycast filter buffer )
+
+    local legitbot_filter = {}
+
+    local function set_legitbot_filter(character)
+        legitbot_filter[1] = character
+        legitbot_filter[2] = local_character
+        legitbot_filter[3] = ignored
+        legitbot_filter[4] = bush
+        legitbot_filter[5] = vehicles
+
+        local backtrack = get_backtrack_models()
+
+        for i = 1, #backtrack do
+            legitbot_filter[5+i] = backtrack[i]
+        end
+
+        for i = #legitbot_filter, 5 + #backtrack, -1 do
+            legitbot_filter[i] = nil
+        end
+
+        return legitbot_filter
+    end
+
     local target_changed_signal = signals["on_legitbot_target_changed"]
 
     set_legitbot_target = LPH_NO_VIRTUALIZE(function(target, automatic)
@@ -22820,7 +23222,7 @@ do
 
     local get_legitbot_target = nil; get_legitbot_target = LPH_NO_VIRTUALIZE(function(dt, getting, bypass)
         local camera_pos = camera["CFrame"]["p"]
-        local mouse_pos = get_mouse_location(user_input_service)
+        local mouse_pos = get_mouse_position_cached()
 
         if not bypass then
             legitbot_dont_aim = false
@@ -22830,7 +23232,13 @@ do
 
                 if data then
                     local parts = data[4]
-                    local hrp = parts["HumanoidRootPart"]
+                    local hrp = parts and parts["HumanoidRootPart"]
+
+                    if not hrp then
+                        set_legitbot_target(nil)
+                        return
+                    end
+
                     local hrp_position = hrp["Position"]
 
                     if (legitbot_untarget_when_knocked and data[18]) then
@@ -22841,7 +23249,7 @@ do
                     if legitbot_untarget_when_not_visible then
                         local distance = hrp_position-camera_pos
 
-                        params["FilterDescendantsInstances"] = {data[3], local_character, ignored, bush, vehicles, get_backtrack_models()}
+                        params["FilterDescendantsInstances"] = set_legitbot_filter(data[3])
 
                         if raycast(workspace, camera_pos, distance.unit * distance.Magnitude, params) then
                             set_legitbot_target(legitbot_automatic and get_legitbot_target(dt, true, true) or nil)
@@ -22876,7 +23284,7 @@ do
                         if legitbot_ignore_if_not_visible then
                             local distance = hrp_position-camera_pos
 
-                            params["FilterDescendantsInstances"] = {data[3], local_character, ignored, bush, vehicles, get_backtrack_models()}
+                            params["FilterDescendantsInstances"] = set_legitbot_filter(data[3])
                             if raycast(workspace, camera_pos, distance.unit * distance.Magnitude, params) then
                                 legitbot_dont_aim = true
                                 return
@@ -22900,9 +23308,9 @@ do
         local targets = {}
 
         local local_client_position = local_client_position["p"]
-        local mouse_position = get_mouse_location(user_input_service)
+        local mouse_position = get_mouse_position_cached()
         
-        local field_of_view = legitbot_field_of_view and (camera["ViewportSize"]["Magnitude"]/(pi/2))*legitbot_field_of_view or false
+        local field_of_view = legitbot_field_of_view and (get_viewport_size_cached()["Magnitude"]/(pi/2))*legitbot_field_of_view or false
 
         for player, data in player_data do
             if not data[7] and not data[18] then
@@ -22928,7 +23336,7 @@ do
                             if legitbot_ignore_if_not_visible then
                                 local distance = hrp_position-camera_pos
 
-                                params["FilterDescendantsInstances"] = {data[3], local_character, ignored, bush, vehicles, get_backtrack_models()}
+                                params["FilterDescendantsInstances"] = set_legitbot_filter(data[3])
                                 if raycast(workspace, camera_pos, distance.unit * distance.Magnitude, params) then
                                     continue
                                 end
@@ -22965,7 +23373,7 @@ do
     end)
 
     local get_closest_part = LPH_NO_VIRTUALIZE(function(data)
-        local mouse_pos = get_mouse_location(user_input_service)
+        local mouse_pos = get_mouse_position_cached()
 
         local parts = data[4]
         local closest = math["huge"]
@@ -23064,7 +23472,7 @@ do
     local fov_circle_outline = nil
     local fov_circle_dead_zone = nil
 
-    local aim_assist_field_of_view = (camera["ViewportSize"]["Magnitude"]/(pi/2))*(flags["aim_assist_field_of_view"]/180)
+    local aim_assist_field_of_view = (get_viewport_size_cached()["Magnitude"]/(pi/2))*(flags["aim_assist_field_of_view"]/180)
     local aim_assist_dead_zone = 0
     local aim_assist_vertical_smoothing = 6
     local aim_assist_horizontal_smoothing = 6
@@ -23078,7 +23486,7 @@ do
     local custom_aim_assist_position = nil
 
     local do_aim_assist = LPH_JIT_MAX(function(dt, local_hrp)
-        local mouse_position = get_mouse_location(user_input_service)
+        local mouse_position = get_mouse_position_cached()
 
         if fov_circle then
             local old_position = fov_circle["Position"]
@@ -23156,7 +23564,7 @@ do
     end)
 
     local update_aim_assist_field_of_view = function()
-        aim_assist_field_of_view = (camera["ViewportSize"]["Magnitude"]/(pi/2))*(flags["aim_assist_field_of_view"]/180)
+        aim_assist_field_of_view = (get_viewport_size_cached()["Magnitude"]/(pi/2))*(flags["aim_assist_field_of_view"]/180)
         aim_assist_dead_zone = aim_assist_field_of_view*(flags["aim_assist_dead_zone"]/100)
 
         if fov_circle_outline then
@@ -23397,14 +23805,14 @@ do
     local fov_circle_outline = nil
 
     local silent_aim_max_distance = 0
-    local silent_aim_field_of_view = (camera["ViewportSize"]["Magnitude"]/(pi/2))*(flags["silent_aim_field_of_view"]/180)
+    local silent_aim_field_of_view = (get_viewport_size_cached()["Magnitude"]/(pi/2))*(flags["silent_aim_field_of_view"]/180)
     local silent_aim_multipoint = 0.15
     local silent_aim_hitbox = "Head"
     local silent_aim_max_curve = nil
     local silent_aim_dont_curve_vertically = false
 
     local do_silent_aim = LPH_JIT_MAX(function(dt, hrp)
-        local mouse_position = get_mouse_location(user_input_service)
+        local mouse_position = get_mouse_position_cached()
 
         if fov_circle then
             local old_position = fov_circle["Position"]
@@ -23456,7 +23864,7 @@ do
 
     local update_silent_aim_field_of_view = function()
         local value = flags["silent_aim_field_of_view"]
-        silent_aim_field_of_view = (camera["ViewportSize"]["Magnitude"]/(pi/2))*(value/180)
+        silent_aim_field_of_view = (get_viewport_size_cached()["Magnitude"]/(pi/2))*(value/180)
 
         if fov_circle_outline then
             fov_circle_outline["Radius"] = silent_aim_field_of_view
@@ -23627,7 +24035,7 @@ do
         local triggerbot_tick = clock()
 
         local do_triggerbot = LPH_JIT_MAX(function(dt, hrp)
-            local mouse_position = get_mouse_location(user_input_service)
+            local mouse_position = get_mouse_position_cached()
 
             if dt ~= last_target_dt then
                 get_legitbot_target(dt)
@@ -23871,15 +24279,24 @@ do
             return backtrack_data[player] and backtrack_data[player][3] or nil
         end)
 
+        local backtrack_models_buffer = {}
+
         get_backtrack_models = LPH_JIT_MAX(function()
-            local models = {}
+            local models = backtrack_models_buffer
+            local count = 0
 
             for player, data in backtrack_data do
                 local model = data[1]
                 if model then
-                    models[#models+1] = model
+                    count+=1
+                    models[count] = model
                 end
             end
+
+            for i = #models, count + 1, -1 do
+                models[i] = nil
+            end
+
             return models
         end)
 
@@ -24270,8 +24687,12 @@ do
 
         local hrp = vehicle or local_parts["HumanoidRootPart"]
 
-        for i = 1, #heartbeat do
-            spawn(heartbeat[i], dt, hrp)
+        if dt > 0 then
+            local beat = heartbeat
+
+            for i = 1, #beat do
+                spawn(beat[i], dt, hrp)
+            end
         end
 
         if hrp then
@@ -24590,8 +25011,8 @@ do
                             local tab = data[2]
         
                             if not tab or not tab["destroy"] then
-                                juju["create_tab"]()
-                                data[6] = juju["create_section"]("update yo addon twin", 1, 1, 0)
+                                new["create_tab"]()
+                                data[6] = new["create_section"]("update yo addon twin", 1, 1, 0)
                             end
 
                             return data[6]:create_element(new_info, new_elements)
@@ -25025,7 +25446,7 @@ do
                         if hrp then
                             local position, on_screen = world_to_viewport_point(camera, hrp["Position"])
                             if on_screen then
-                                local mouse_pos = get_mouse_location(user_input_service)
+                                local mouse_pos = get_mouse_position_cached()
                                 distance = (vector2_new(position["X"], position["Y"]) - mouse_pos)["Magnitude"]
                             end
                         end
@@ -25119,7 +25540,7 @@ do
 
                     local background = create_fake_drawing("Image", {
                         ["Color"] = color3_fromrgb(255, 255, 255),
-                        ["Size"] = udim2_new(0, camera["ViewportSize"]["X"], 0, camera["ViewportSize"]["Y"]),
+                        ["Size"] = udim2_new(0, get_viewport_size_cached()["X"], 0, get_viewport_size_cached()["Y"]),
                         ["Position"] = udim2_new(0, 0, 0, 0),
                         ["Transparency"] = 0,
                         ["Visible"] = true,
@@ -25158,7 +25579,7 @@ do
                     })
 
                     create_connection(camera:GetPropertyChangedSignal("ViewportSize"), function()
-                        background["Size"] = udim2_new(0, camera["ViewportSize"]["X"], 0, camera["ViewportSize"]["Y"])
+                        background["Size"] = udim2_new(0, get_viewport_size_cached()["X"], 0, get_viewport_size_cached()["Y"])
                     end)
                     error["Visible"] = false
                     local blur = find_first_child_of_class(cloneref(game:GetService("Lighting")), "BlurEffect")
@@ -25241,12 +25662,12 @@ do
                         tween(hop_text, {["Transparency"] = 0.5}, circular, out, 0.4)
                         tween(reason_text, {["Transparency"] = 0.5}, circular, out, 0.4)
                         create_connection(camera:GetPropertyChangedSignal("ViewportSize"), function()
-                            background["Size"] = udim2_new(0, camera["ViewportSize"]["X"], 0, camera["ViewportSize"]["Y"])
+                            background["Size"] = udim2_new(0, get_viewport_size_cached()["X"], 0, get_viewport_size_cached()["Y"])
                         end)
 
                         local last_tweened = nil
                         create_connection(mouse["Move"], function()
-                            local pos = get_mouse_location(user_input_service)
+                            local pos = get_mouse_position_cached()
                             local rejoin_pos = rejoin_frame["Position"]
                             local hop_pos = hop_frame["Position"]
                             local size = hop_frame["real_size"]["X"]
@@ -25355,7 +25776,7 @@ do
 
     local_cash = currency["Value"]
 
-    local information_folder = wait_for_child(data_folder, "Information", 5)
+    local information_folder = wait_for_child(data_folder, "Information", 9e9)
     local crew = find_first_child(information_folder, "Crew") or wait_for_child(information_folder, "Crew", 9e9)
 
     local_crew = crew["Value"]
