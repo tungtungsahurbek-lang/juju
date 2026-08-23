@@ -12475,8 +12475,8 @@ do
         local do_center_panel = LPH_JIT_MAX(function(dt)
             local old = text3["Text"]
             local new = local_reloading and "reloading" or local_following and "following" or stomping and "stomping" or purchasing and "purchasing" or (in_void or in_void == nil) and "void" or "unsafe" or local_parts["ForceField"] and "invulnerable"
-            text3["Text"] = new
             if old ~= new then
+                text3["Text"] = new
                 tween(text3, {["Transparency"] = 0.35}, linear, out, 0.09)
                 if new ~= "void" then
                     delay(0.07, tween, text3, {["Transparency"] = 0.7}, linear, out, 0.09)
@@ -16781,12 +16781,17 @@ do
     end)
 
     local update_armor_bar = LPH_NO_VIRTUALIZE(function(data, new_armor, difference)
+        local drawings = data[5]
+
+        if not drawings or not drawings[10] then
+            return
+        end
+
         if hide_armor_bar_if_empty and new_armor == 0 then
-            local drawings = data[5]
             drawings[10]["Size"] = zero_size
             drawings[11]["Size"] = zero_size
 
-            if do_armor_bar_gradient then
+            if do_armor_bar_gradient and drawings[12] then
                 drawings[12]["Size"] = zero_size
             end
 
@@ -16832,16 +16837,29 @@ do
     local update_chams = LPH_NO_VIRTUALIZE(function(data)
         local chams = data[12]
         local parts = data[4]
+
+        if not chams then
+            return
+        end
+
         for i = 1, #body_parts do
             local cham = chams[i]
-            local local_part = parts[body_parts[i]]
-            cham["Adornee"] = local_part
-            cham["Size"] = local_part and local_part["Size"] + chams_offset or chams_offset
+
+            if cham then
+                local local_part = parts[body_parts[i]]
+                cham["Adornee"] = local_part
+                cham["Size"] = local_part and local_part["Size"] + chams_offset or chams_offset
+            end
         end
     end)
 
     local update_highlight = LPH_NO_VIRTUALIZE(function(data)
         local highlight = data[8]
+
+        if not highlight then
+            return
+        end
+
         highlight["Adornee"] = nil
         highlight["Parent"] = nil
         highlight["Adornee"] = data[3]
@@ -16865,7 +16883,13 @@ do
     end)
 
     local update_health_text = LPH_NO_VIRTUALIZE(function(data, health)
-        data[5][7]["Text"] = (hide_health_text_if_full and health >= data[10] or false) and "" or tostring(health)
+        local health_text = data[5][7]
+
+        if not health_text then
+            return
+        end
+
+        health_text["Text"] = (hide_health_text_if_full and health >= data[10] or false) and "" or tostring(health)
     end)
 
     local create_health_text = LPH_NO_VIRTUALIZE(function(data)
@@ -20944,7 +20968,17 @@ do
     do
         local old = getfflag("S2PhysicsSenderRate")
 
+        local last_sender_tick = 0
+
         local do_automatic = LPH_NO_VIRTUALIZE(function()
+            local tick = clock()
+
+            if tick - last_sender_tick < 0.25 then
+                return
+            end
+
+            last_sender_tick = tick
+
             setfflag("S2PhysicsSenderRate", tostring(round(local_fps, 1)))
         end)
 
@@ -21441,6 +21475,9 @@ do
     local old_radius = 0
     local rendering = false
     local get_bounding_box = nil
+    local bbox_cache_character = nil
+    local bbox_cache_tick = 0
+    local bbox_cache_radius = 2
 
     do
         local model = create_instance("Model", {})
@@ -21457,8 +21494,18 @@ do
             local color = flags["3d_target_circle_color"]
             local gradient_color = flags["3d_target_circle_gradient_color"]
 
-            local _, radius = get_bounding_box(ragebot_target[3])
-            local new_radius = clamp((radius["X"] + radius["Z"]) / 3, 2, 10)
+            -- > bounding box walk is expensive, cache it briefly per character
+
+            local circle_character = ragebot_target[3]
+
+            if circle_character ~= bbox_cache_character or clock() - bbox_cache_tick > 0.25 then
+                local _, radius = get_bounding_box(circle_character)
+                bbox_cache_radius = clamp((radius["X"] + radius["Z"]) / 3, 2, 10)
+                bbox_cache_character = circle_character
+                bbox_cache_tick = clock()
+            end
+
+            local new_radius = bbox_cache_radius
 
             if new_radius ~= old_radius and abs(new_radius - old_radius) > 1.1 then
                 old_radius = new_radius
@@ -24034,6 +24081,47 @@ do
         local triggerbot_hover_tick = clock()
         local triggerbot_tick = clock()
 
+        -- > reused filter buffer, no per-frame allocations
+
+        local triggerbot_filter = {}
+
+        local function build_triggerbot_filter(data, parts)
+            local count = 4
+
+            triggerbot_filter[1] = local_character
+            triggerbot_filter[2] = ignored
+            triggerbot_filter[3] = bush
+            triggerbot_filter[4] = vehicles
+
+            if data[13] then
+                count+=1
+                triggerbot_filter[count] = data[13]
+            end
+
+            local backtrack = get_backtrack_models()
+
+            for i = 1, #backtrack do
+                count+=1
+                triggerbot_filter[count] = backtrack[i]
+            end
+
+            for _, part in parts do
+                if part["ClassName"] == "Accessory" then
+                    count+=1
+                    triggerbot_filter[count] = part
+                elseif part:IsA("BasePart") and part["Transparency"] == 1 then
+                    count+=1
+                    triggerbot_filter[count] = part
+                end
+            end
+
+            for i = #triggerbot_filter, count + 1, -1 do
+                triggerbot_filter[i] = nil
+            end
+
+            params["FilterDescendantsInstances"] = triggerbot_filter
+        end
+
         local do_triggerbot = LPH_JIT_MAX(function(dt, hrp)
             local mouse_position = get_mouse_position_cached()
 
@@ -24049,17 +24137,7 @@ do
                 if not data[7] and not data[18] and not parts["ForceField"] and not parts["FORCEFIELD"] and target_hrp then
                     local max = (triggerbot_max_distance == 0 and (local_gun or 250) or triggerbot_max_distance)
                     if triggerbot_max_distance == 2500 or (hrp["Position"]-target_hrp["Position"])["Magnitude"] <= max then
-                        local ignore = {local_character, ignored, bush, vehicles, data[13], get_backtrack_models()}
-
-                        for name, part in parts do
-                            if part["ClassName"] == "Accessory" then
-                                ignore[#ignore+1] = part
-                            elseif part:IsA("BasePart") and part["Transparency"] == 1 then
-                                ignore[#ignore+1] = part
-                            end
-                        end
-
-                        params["FilterDescendantsInstances"] = ignore
+                        build_triggerbot_filter(data, parts)
 
                         local result = raycast(workspace, ray["Origin"], ray["Direction"] * (max), params)
 
