@@ -96,18 +96,23 @@ LPH_JIT_MAX(function()
         end
 
         if connection and signal then
-            old = nil; old = safe_hook_function(signal.__index, LPH_NO_UPVALUES(function(self, index)
-                if (index:find("^[Cc]onnect")) and getinfo(3) then
-                    local source = getinfo(3).source
-                    local _, count = string.gsub(source, "%.", "")
-                    if count == 1 and not string.find(source, "Replicated") then
-                        return function()
-                            return setrawmetatable(newproxy(true), connection)
+            pcall(function()
+                local hook_target = signal.__index
+
+                old = nil
+                old = safe_hook_function(hook_target, LPH_NO_UPVALUES(function(self, index)
+                    if (index:find("^[Cc]onnect")) and getinfo(3) then
+                        local source = getinfo(3).source
+                        local _, count = string.gsub(source, "%.", "")
+                        if count == 1 and not string.find(source, "Replicated") then
+                            return function()
+                                return setrawmetatable(newproxy(true), connection)
+                            end
                         end
                     end
-                end
-                return old(self, index)
-            end))
+                    return old(self, index)
+                end))
+            end)
         end
 
         old2 = nil; old2 = safe_hook_function(cloneref(game["GetService"](game, "UserInputService")).GetFocusedTextBox, newcclosure(LPH_NO_UPVALUES(function()
@@ -8347,7 +8352,7 @@ task.spawn(function()
         "teleport", "speed", "report", "monitor", "scanner", "submitreport"
     }
     while true do
-        task.wait(5)
+        task.wait(10)
         local gc = getgc(true)
         local total = #gc
         local chunk = math.ceil(total / 10)
@@ -8945,7 +8950,14 @@ do
         end
         if game_on_client_event then
             setthreadidentity(4)
-            return game_on_client_event(packet, ...)
+
+            -- > the game's handler races character loads (LowerTorso etc), don't let it kill our thread
+
+            local ok, result = pcall(game_on_client_event, packet, ...)
+
+            if ok then
+                return result
+            end
         end
     end))
 
@@ -9026,7 +9038,7 @@ do
             end
             if getnamecallmethod() == "FireServer" or getnamecallmethod() == "InvokeServer" then
                 local ok, name = pcall(function() return self.Name:lower() end)
-                if ok and (name:find("log") or name:find("report") or name:find("monitor")) then
+                if ok and (name:find("log") or name:find("report") or name:find("monitor") or name:find("anticheat") or name:find("ac_") or name:find("_ac") or name:find("cheat")) then
                     return
                 end
             end
@@ -11154,17 +11166,28 @@ do
 
     local on_character_added = LPH_NO_VIRTUALIZE(function(character)
         local humanoid = wait_for_child(character, "Humanoid", 5)
-        local head = wait_for_child(character, "Head", 5)
 
         if not humanoid then
             return
         end
-        
+
         local player = find_first_child(players_service, character["Name"])
-        local data = player_data[player]
+        local data = player and player_data[player]
+
+        -- > player can leave while their character is loading
+
+        if not data then
+            return
+        end
+
         data[3] = character
 
-        signals["on_player_character_added_quick"]:Fire(character, head["Position"])
+        -- > Head may not exist yet on laggy / streamed spawns, don't crash reading it
+
+        local head = find_first_child(character, "Head")
+        local head_position = head and head["Position"] or vector3_new()
+
+        signals["on_player_character_added_quick"]:Fire(character, head_position)
 
                 task.spawn(function()
             local hrp = wait_for_child(character, "HumanoidRootPart", 5)
@@ -16323,6 +16346,19 @@ do
                     for _, drawing in drawings do
                         drawing["Visible"] = true
                     end
+
+                    local highlight = data[8]
+                    if highlight then
+                        highlight["Enabled"] = true
+                    end
+
+                    local chams = data[12]
+                    if chams then
+                        for i = 1, #chams do
+                            chams[i]["Visible"] = true
+                        end
+                    end
+
                     data[6] = true
                 end
 
@@ -16426,6 +16462,19 @@ do
                 for _, drawing in drawings do
                     drawing["Visible"] = false
                 end
+
+                local highlight = data[8]
+                if highlight then
+                    highlight["Enabled"] = false
+                end
+
+                local chams = data[12]
+                if chams then
+                    for i = 1, #chams do
+                        chams[i]["Visible"] = false
+                    end
+                end
+
                 data[6] = false
             end
         end
@@ -17076,7 +17125,7 @@ do
 
             for name, part in parts do
                 if part["ClassName"] == "Accessory" then
-                    local handle = part["Handle"]
+                    local handle = find_first_child(part, "Handle")
 
                     if handle and handle["ClassName"] == "MeshPart" then
                         local original = handle:GetAttribute(material_attribute)
@@ -17316,7 +17365,7 @@ do
 
                 for name, part in local_parts do
                     if part["ClassName"] == "Accessory" then
-                        local handle = part["Handle"]
+                        local handle = find_first_child(part, "Handle")
 
                         if handle and handle["ClassName"] == "MeshPart" then
                             if not handle:GetAttribute(material_attribute) then
@@ -18843,7 +18892,17 @@ do
                 destroy(shirt_graphic)
             end
 
-            humanoid:ApplyDescriptionClientServer(description)
+            -- > some executors / games strip these methods, try both gracefully
+
+            local applied = pcall(function()
+                humanoid:ApplyDescriptionClientServer(description)
+            end)
+
+            if not applied then
+                pcall(function()
+                    humanoid:ApplyDescription(description)
+                end)
+            end
 
             if not clone then
                 scale_connection = create_connection(humanoid["BodyWidthScale"]:GetPropertyChangedSignal("Value"), function()
@@ -18854,7 +18913,16 @@ do
                     last_description["HeightScale"] = humanoid["BodyHeightScale"]["Value"]
                     last_description["ProportionScale"] = humanoid["BodyProportionScale"]["Value"]
                     last_description["WidthScale"] = humanoid["BodyWidthScale"]["Value"]
-                    humanoid:ApplyDescriptionClientServer(last_description)
+
+                    local reapplied = pcall(function()
+                        humanoid:ApplyDescriptionClientServer(last_description)
+                    end)
+
+                    if not reapplied then
+                        pcall(function()
+                            humanoid:ApplyDescription(last_description)
+                        end)
+                    end
 
                     scale_connection:Disconnect()
                 end)
@@ -19516,7 +19584,7 @@ do
         menu_references["velocity_desync_type"] = menu_references["velocity_desync_settings"]:create_element({["name"] = "type"}, {["dropdown"] = {["flag"] = "velocity_desync_type", ["options"] = {"limit", "high y", "high", "zero", "low"}, ["default"] = {"high"}, ["multi"] = false, ["requires_one"] = true}})
         menu_references["void_hide"] = menu_references["anti_section"]:create_element({["name"] = "void hide"}, {["toggle"] = {["flag"] = "void_hide"}})
         menu_references["void_hide_settings"] = menu_references["void_hide"]:create_settings()
-        menu_references["void_hide_type"] = menu_references["void_hide_settings"]:create_element({["name"] = "type"}, {["dropdown"] = {["options"] = game["PlaceId"] == 7213786345 and {"vc server"} or {"random", "bait"}, ["flag"] = "void_hide_type", ["requires_one"] = true, ["default"] = game["PlaceId"] == 7213786345 and {"vc server"} or {"random"}}})
+        menu_references["void_hide_type"] = menu_references["void_hide_settings"]:create_element({["name"] = "type"}, {["dropdown"] = {["options"] = game["PlaceId"] == 7213786345 and {"vc server", "random bait", "deep y"} or {"random", "bait", "random bait", "deep y"}, ["flag"] = "void_hide_type", ["requires_one"] = true, ["default"] = game["PlaceId"] == 7213786345 and {"vc server"} or {"random"}}})
         menu_references["void_hide_bait_distance"] = menu_references["void_hide_settings"]:create_element({["name"] = "bait distance"}, {["slider"] = {["min"] = 200, ["max"] = 2500, ["decimals"] = 0, ["default"] = 250, ["flag"] = "void_hide_bait_distance", ["suffix"] = " studs"}})
         menu_references["void_hide_bait_cooldown"] = menu_references["void_hide_settings"]:create_element({["name"] = "bait cooldown"}, {["slider"] = {["min"] = 0.01, ["max"] = 1.5, ["decimals"] = 2, ["default"] = 0.5, ["flag"] = "void_hide_bait_cooldown", ["suffix"] = "s"}})
         menu_references["void_hide_bait_time"] = menu_references["void_hide_settings"]:create_element({["name"] = "bait time"}, {["slider"] = {["min"] = 0.01, ["max"] = 0.3, ["decimals"] = 2, ["default"] = 0.03, ["flag"] = "void_hide_bait_time", ["suffix"] = "s"}})
@@ -19524,6 +19592,11 @@ do
         menu_references["void_hide_force_when"] = menu_references["void_hide_settings"]:create_element({["name"] = "force when"}, {["dropdown"] = {["options"] = {"not full health", "tabbed out", "reloading"}, ["flag"] = "void_hide_force_when", ["multi"] = true, ["requires_one"] = false}})
         menu_references["void_hide_exploit"] = menu_references["void_hide_settings"]:create_element({["name"] = "spam"}, {["toggle"] = {["flag"] = "void_hide_exploit"}})
         menu_references["void_hide_stop_if_forced"] = menu_references["void_hide_settings"]:create_element({["name"] = "stop if forced"}, {["toggle"] = {["flag"] = "void_hide_stop_if_forced"}})
+        menu_references["deep_y_force_when"] = menu_references["void_hide_settings"]:create_element({["name"] = "force when"}, {["dropdown"] = {["options"] = {"reloading", "not full health", "tabbed out"}, ["flag"] = "deep_y_force_when", ["multi"] = true, ["requires_one"] = false}})
+        menu_references["deep_y_disable_when"] = menu_references["void_hide_settings"]:create_element({["name"] = "disable when"}, {["dropdown"] = {["options"] = {"target selected", "auto stomping", "purchasing", "knocked"}, ["flag"] = "deep_y_disable_when", ["multi"] = true, ["requires_one"] = false}})
+        menu_references["random_bait_cooldown"] = menu_references["void_hide_settings"]:create_element({["name"] = "bait cooldown"}, {["slider"] = {["min"] = 1, ["max"] = 15, ["decimals"] = 1, ["default"] = 5, ["flag"] = "random_bait_cooldown", ["suffix"] = "s"}})
+        menu_references["random_bait_force_when"] = menu_references["void_hide_settings"]:create_element({["name"] = "force when"}, {["dropdown"] = {["options"] = {"reloading", "tabbed out", "not full health"}, ["flag"] = "random_bait_force_when", ["multi"] = true, ["requires_one"] = false}})
+        menu_references["random_bait_disable_when"] = menu_references["void_hide_settings"]:create_element({["name"] = "disable when"}, {["dropdown"] = {["options"] = {"target selected", "following target", "target knocked", "purchasing", "auto stomping"}, ["flag"] = "random_bait_disable_when", ["multi"] = true, ["requires_one"] = false}})
         menu_references["void_hide_offset"] = menu_references["void_hide_settings"]:create_element({["name"] = "offset"}, {["slider"] = {["min"] = 0, ["max"] = 250, ["flag"] = "void_hide_offset", ["min_text"] = "off", ["suffix"] = "studs"}})
         menu_references["void_hide_void_time"] = menu_references["void_hide_settings"]:create_element({["name"] = "void time"}, {["slider"] = {["min"] = 0.01, ["max"] = 2, ["decimals"] = 3, ["default"] = 0.47, ["flag"] = "void_hide_void_time", ["suffix"] = "s"}})
         menu_references["void_hide_teleport_time"] = menu_references["void_hide_settings"]:create_element({["name"] = "teleport time"}, {["slider"] = {["min"] = 0.01, ["max"] = 2, ["decimals"] = 3, ["default"] = 0.1, ["flag"] = "void_hide_teleport_time", ["suffix"] = "s"}})
@@ -20117,6 +20190,15 @@ do
                                 weight_total = weight_total + w
                             end
                             local smoothed = sum / weight_total
+
+                            -- > fling / teleport spikes poison prediction, clamp to sane speeds
+
+                            local speed = smoothed.Magnitude
+
+                            if speed > 350 then
+                                smoothed = smoothed * (350 / speed)
+                            end
+
                             target_velocity = smoothed
 
                             local variance = 0
@@ -20151,7 +20233,9 @@ do
                         data["last_update_time"] = current_time
                     end
             
-                    if data["weight"] < 0.1 then
+                    -- > hard 2s ttl so stale cells can't linger when forget rate is low
+
+                    if data["weight"] < 0.1 or current_time - data["last_update_time"] > 2 then
                         positions_to_remove[#positions_to_remove+1] = position
                     end
                 end
@@ -20166,8 +20250,15 @@ do
             
                 if target_velocity then
                     local pred_time = prediction == 0 and local_ping/500 or prediction == 2 and 0 or prediction
-                    local confident_pred = pred_time * clamp(resolver_confidence * 1.5, 0.3, 1)
-                    ragebot_aim_position += target_velocity * confident_pred
+                local confident_pred = pred_time * clamp(resolver_confidence * 1.5, 0.3, 1)
+
+                -- > high confidence + near-still target: don't over-lead micro jitter
+
+                if resolver_confidence > 0.7 and target_velocity.Magnitude < 2 then
+                    confident_pred = 0
+                end
+
+                ragebot_aim_position += target_velocity * confident_pred
                 end
 
                 if flags["auto_fire_at_backtrack"] then
@@ -20244,6 +20335,10 @@ do
                     if highest_data and highest_weight > void_spam_resolver_accuracy then
                         ragebot_aim_position = highest_data["pos"]
                         target_velocity = vector3_zero
+
+                        -- > resolved position becomes the new truth, drop poisoned samples
+
+                        target_velocity_history = {}
                         target_last_position = highest_data["pos"]
                         did_defensive = true
                         is_defensive = true
@@ -21488,9 +21583,11 @@ do
     local sin = math["sin"]
 
     local do_target_circle = LPH_JIT_MAX(function(dt, hrp)
-        if ragebot_target and hrp and not ragebot_target[7] then
+        local upper_torso = ragebot_target and ragebot_target[4] and ragebot_target[4]["UpperTorso"]
+
+        if ragebot_target and hrp and upper_torso and not ragebot_target[7] then
             rendering = true
-            local position = ragebot_target[4]["UpperTorso"]["Position"]
+            local position = upper_torso["Position"]
             local color = flags["3d_target_circle_color"]
             local gradient_color = flags["3d_target_circle_gradient_color"]
 
@@ -22104,6 +22201,30 @@ do
         local void_hide_force_when_not_full_health = false
         local void_hide_type = game["PlaceId"] == 7213786345 and "vc server" or "random"
 
+        -- > ( deep y state )
+
+        local deep_y_force_reloading = false
+        local deep_y_force_not_full_health = false
+        local deep_y_force_tabbed_out = false
+        local deep_y_disable_target_selected = false
+        local deep_y_disable_auto_stomping = false
+        local deep_y_disable_purchasing = false
+        local deep_y_disable_knocked = false
+
+        -- > ( random bait state )
+
+        local random_bait_force_reloading = false
+        local random_bait_force_tabbed_out = false
+        local random_bait_force_not_full_health = false
+        local random_bait_disable_target_selected = false
+        local random_bait_disable_following_target = false
+        local random_bait_disable_target_knocked = false
+        local random_bait_disable_purchasing = false
+        local random_bait_disable_auto_stomping = false
+        local random_bait_next_bait = 0
+        local random_bait_stage = false
+        local random_bait_cooldown = flags["random_bait_cooldown"]
+
 
         local isrbxactive = isrbxactive or LPH_NO_VIRTUALIZE(function() return true end)
 
@@ -22127,6 +22248,130 @@ do
             menu_references["void_hide_bait_time"]:set_visible(is_bait)
             menu_references["void_hide_bait_cooldown"]:set_visible(is_bait)
 
+            -- > deep y settings only visible when the method is selected
+
+            local is_deep = value[1] == "deep y"
+            menu_references["deep_y_force_when"]:set_visible(is_deep)
+            menu_references["deep_y_disable_when"]:set_visible(is_deep)
+
+            if is_deep then
+                menu_references["void_hide_bait_distance"]:set_visible(false)
+                menu_references["void_hide_bait_time"]:set_visible(false)
+                menu_references["void_hide_bait_cooldown"]:set_visible(false)
+            end
+
+            if not is_bait and not is_deep then
+                menu_references["void_hide_bait_distance"]:set_visible(false)
+                menu_references["void_hide_bait_time"]:set_visible(false)
+                menu_references["void_hide_bait_cooldown"]:set_visible(false)
+            end
+
+            -- > random bait settings only visible when the method is selected
+
+            local is_rb = value[1] == "random bait"
+            menu_references["random_bait_cooldown"]:set_visible(is_rb)
+            menu_references["random_bait_force_when"]:set_visible(is_rb)
+            menu_references["random_bait_disable_when"]:set_visible(is_rb)
+
+            if is_rb then
+                menu_references["deep_y_force_when"]:set_visible(false)
+                menu_references["deep_y_disable_when"]:set_visible(false)
+            else
+                menu_references["random_bait_cooldown"]:set_visible(false)
+                menu_references["random_bait_force_when"]:set_visible(false)
+                menu_references["random_bait_disable_when"]:set_visible(false)
+            end
+        end)
+
+        create_connection(menu_references["deep_y_force_when"]["on_dropdown_change"], function(value)
+            deep_y_force_reloading = false
+            deep_y_force_not_full_health = false
+            deep_y_force_tabbed_out = false
+
+            for i = 1, #value do
+                local option = value[i]
+
+                if option == "reloading" then
+                    deep_y_force_reloading = true
+                elseif option == "not full health" then
+                    deep_y_force_not_full_health = true
+                elseif option == "tabbed out" then
+                    deep_y_force_tabbed_out = true
+                end
+            end
+        end)
+
+        create_connection(menu_references["deep_y_disable_when"]["on_dropdown_change"], function(value)
+            deep_y_disable_target_selected = false
+            deep_y_disable_auto_stomping = false
+            deep_y_disable_purchasing = false
+            deep_y_disable_knocked = false
+
+            for i = 1, #value do
+                local option = value[i]
+
+                if option == "target selected" then
+                    deep_y_disable_target_selected = true
+                elseif option == "auto stomping" then
+                    deep_y_disable_auto_stomping = true
+                elseif option == "purchasing" then
+                    deep_y_disable_purchasing = true
+                elseif option == "knocked" then
+                    deep_y_disable_knocked = true
+                end
+            end
+        end)
+
+        menu_references["deep_y_force_when"]:set_visible(false)
+        menu_references["deep_y_disable_when"]:set_visible(false)
+        menu_references["random_bait_cooldown"]:set_visible(false)
+        menu_references["random_bait_force_when"]:set_visible(false)
+        menu_references["random_bait_disable_when"]:set_visible(false)
+
+        create_connection(menu_references["random_bait_cooldown"]["on_slider_change"], function(value)
+            random_bait_cooldown = value
+        end)
+
+        create_connection(menu_references["random_bait_force_when"]["on_dropdown_change"], function(value)
+            random_bait_force_reloading = false
+            random_bait_force_tabbed_out = false
+            random_bait_force_not_full_health = false
+
+            for i = 1, #value do
+                local option = value[i]
+
+                if option == "reloading" then
+                    random_bait_force_reloading = true
+                elseif option == "tabbed out" then
+                    random_bait_force_tabbed_out = true
+                elseif option == "not full health" then
+                    random_bait_force_not_full_health = true
+                end
+            end
+        end)
+
+        create_connection(menu_references["random_bait_disable_when"]["on_dropdown_change"], function(value)
+            random_bait_disable_target_selected = false
+            random_bait_disable_following_target = false
+            random_bait_disable_target_knocked = false
+            random_bait_disable_purchasing = false
+            random_bait_disable_auto_stomping = false
+
+            for i = 1, #value do
+                local option = value[i]
+
+                if option == "target selected" then
+                    random_bait_disable_target_selected = true
+                elseif option == "following target" then
+                    random_bait_disable_following_target = true
+                elseif option == "target knocked" then
+                    random_bait_disable_target_knocked = true
+                elseif option == "purchasing" then
+                    random_bait_disable_purchasing = true
+                elseif option == "auto stomping" then
+                    random_bait_disable_auto_stomping = true
+                end
+            end
         end)
         menu_references["void_hide_bait_distance"]:set_visible(false)
         menu_references["void_hide_bait_time"]:set_visible(false)
@@ -22163,6 +22408,124 @@ do
         
         local do_void_hide = LPH_JIT_MAX(function(dt, hrp)
             local humanoid = local_parts["Humanoid"]
+
+            -- > ( deep y )
+            -- > deep y: every frame you are sent to a fresh random spot at y -999999999 for one render step, then snapped back
+
+            if void_hide_type == "deep y" then
+                local can_deep = true
+
+                if deep_y_disable_target_selected and ragebot_target then can_deep = false end
+                if deep_y_disable_auto_stomping and stomping then can_deep = false end
+                if deep_y_disable_purchasing and purchasing then can_deep = false end
+                if deep_y_disable_knocked and local_knocked then can_deep = false end
+
+                local deep_forced = (deep_y_force_reloading and local_reloading) or (deep_y_force_not_full_health and (humanoid and humanoid["Health"] ~= humanoid["MaxHealth"] or false)) or (deep_y_force_tabbed_out and not isrbxactive())
+
+                if deep_forced then
+                    can_deep = true
+                end
+
+                if hrp and can_deep then
+                    local old_cframe = hrp["CFrame"]
+                    local old_velocity = hrp["Velocity"]
+                    in_void = true
+
+                    hrp["CFrame"] = cframe_new(math_random(-15, 15), -999999999, math_random(-15, 15)) * cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
+
+                    render_stepped_wait(render_stepped)
+                    hrp["CFrame"] = old_cframe
+                    hrp["Velocity"] = old_velocity
+                else
+                    in_void = false
+                end
+
+                return
+            end
+
+            -- > ( random bait )
+            -- mostly classic far-random voiding; every cooldown seconds you get
+            -- teleported to 0,0,0 once, then to a corner (±1, y 1), then back to random
+
+            if void_hide_type == "random bait" then
+                local can_bait = true
+
+                if random_bait_disable_target_selected and ragebot_target then can_bait = false end
+                if random_bait_disable_following_target and local_following then can_bait = false end
+                if random_bait_disable_target_knocked and (flags["ragebot"] and ragebot_target and ragebot_target[18]) then can_bait = false end
+                if random_bait_disable_purchasing and purchasing then can_bait = false end
+                if random_bait_disable_auto_stomping and stomping then can_bait = false end
+
+                local rb_forced = (random_bait_force_reloading and local_reloading) or (random_bait_force_tabbed_out and not isrbxactive()) or (random_bait_force_not_full_health and (humanoid and humanoid["Health"] ~= humanoid["MaxHealth"] or false))
+
+                if rb_forced then
+                    can_bait = true
+                end
+
+                if hrp and can_bait and not ragebot_force_position then
+                    local old_cframe = hrp["CFrame"]
+                    local old_velocity = hrp["Velocity"]
+                    local tick_rb = clock()
+
+                    -- > same timing gate as the random method when exploit spam is on
+
+                    local window_open = true
+
+                    if flags["void_hide_exploit"] then
+                        if tick_rb - last > void_hide_void_time then
+                            last = tick_rb
+                            window_open = false
+                            in_void = false
+                        elseif tick_rb - last < void_hide_teleport_time then
+                            window_open = false
+                            in_void = false
+                        else
+                            in_void = true
+                        end
+                    end
+
+                    if window_open then
+                        in_void = true
+
+                        local goal = nil
+
+                        if tick_rb >= random_bait_next_bait then
+                            if not random_bait_stage then
+                                -- > bait: origin
+
+                                random_bait_stage = true
+                                random_bait_next_bait = tick_rb
+                                goal = cframe_new(0, 0, 0)
+                            else
+                                -- > corner next to the bait spot, schedule the next one
+
+                                random_bait_stage = false
+                                random_bait_next_bait = tick_rb + random_bait_cooldown
+
+                                local cx = math_random(0, 1) == 0 and 1 or -1
+                                local cz = math_random(0, 1) == 0 and 1 or -1
+
+                                goal = cframe_new(cx, 1, cz)
+                            end
+                        else
+                            -- > regular random voiding between baits
+
+                            goal = cframe_new(math_random(-2147483647, 2147483647), math_random(-400, 2147483647), math_random(-2147483647, 2147483647))
+                        end
+
+                        hrp["CFrame"] = goal * cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
+
+                        render_stepped_wait(render_stepped)
+                        hrp["CFrame"] = old_cframe
+                        hrp["Velocity"] = old_velocity
+                    end
+                else
+                    in_void = false
+                end
+
+                return
+            end
+
             local forced = (void_hide_force_when_reloading and local_reloading) or (void_hide_force_when_tabbed_out and not isrbxactive()) or (void_hide_force_when_not_full_health and (humanoid and humanoid["Health"] ~= humanoid["MaxHealth"] or false))
             if not forced then
                 if (void_hide_disable_when_forced_position and ragebot_force_position) or (void_hide_disable_when_target_selected and ragebot_target) or (void_hide_disable_when_target_knocked and (flags["ragebot"] and ragebot_target and ragebot_target[18])) or (void_hide_disable_when_following_target and local_following) or (void_hide_disable_when_purchasing and purchasing) then
@@ -22510,9 +22873,16 @@ do
             end
 
             if ragebot_target and hrp then
-                local old = hrp["Position"]
-                local target = ragebot_target[4]["HumanoidRootPart"]["Position"]
-                hrp["CFrame"] = cframe_new(old, vector3_new(target["X"], old["Y"], target["Z"]))
+                local target_parts = ragebot_target[4]
+                local target_hrp = target_parts and target_parts["HumanoidRootPart"]
+
+                -- > HRP vanishes for a frame while the target respawns
+
+                if target_hrp then
+                    local old = hrp["Position"]
+                    local target = target_hrp["Position"]
+                    hrp["CFrame"] = cframe_new(old, vector3_new(target["X"], old["Y"], target["Z"]))
+                end
             end
         end)
 
@@ -22572,8 +22942,14 @@ do
 
             local origin = nil
             if tracer_origin == "gun" and local_gun and local_tool then
-                local handle = local_tool["Handle"]
-                origin = world_to_viewport_point(camera, handle["Position"])
+
+                -- > Handle may not exist yet mid-equip, fall back to mouse
+
+                local handle = find_first_child(local_tool, "Handle")
+
+                if handle then
+                    origin = world_to_viewport_point(camera, handle["Position"])
+                end
             elseif tracer_origin == "character" and hrp then
                 origin = world_to_viewport_point(camera, hrp["Position"])
             end
