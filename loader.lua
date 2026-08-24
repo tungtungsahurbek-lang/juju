@@ -22243,7 +22243,7 @@ do
         local random_bait_disable_auto_stomping = false
         local random_bait_next_bait = 0
         local random_bait_stage = false
-        local random_bait_cooldown = flags["random_bait_cooldown"]
+        local random_bait_cooldown = flags["random_bait_cooldown"] or 5
 
 
         local isrbxactive = isrbxactive or LPH_NO_VIRTUALIZE(function() return true end)
@@ -22463,6 +22463,7 @@ do
                     render_stepped_wait(render_stepped)
                     hrp["CFrame"] = old_cframe
                     hrp["Velocity"] = old_velocity
+                    in_void = false
                 else
                     in_void = false
                 end
@@ -22545,6 +22546,7 @@ do
                         render_stepped_wait(render_stepped)
                         hrp["CFrame"] = old_cframe
                         hrp["Velocity"] = old_velocity
+                        in_void = false
                     end
                 else
                     in_void = false
@@ -22655,6 +22657,7 @@ do
                 render_stepped_wait(render_stepped)
                 hrp["CFrame"] = old_cframe
                 hrp["Velocity"] = old_velocity
+                in_void = false
             else
                 in_void = false
             end
