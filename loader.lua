@@ -16359,6 +16359,11 @@ do
                         end
                     end
 
+                    local tool_icon_drawing = drawings[9]
+                    if tool_icon_drawing and not data[13] then
+                        tool_icon_drawing["Visible"] = false
+                    end
+
                     data[6] = true
                 end
 
@@ -16452,9 +16457,12 @@ do
                     end
                 end
 
-                if do_tool_icon then
+                if do_tool_icon and drawings[9] then
                     if data[13] then
                         drawings[9]["Position"] = position + vector2_new((x_size-24)/2, y_size + (do_tool_text and small_size or 0) + 2)
+                        drawings[9]["Visible"] = true
+                    elseif drawings[9]["Visible"] then
+                        drawings[9]["Visible"] = false
                     end
                 end
             elseif data[6] then
@@ -17012,7 +17020,7 @@ do
                 Transparency = transparencies[status][9],
                 Data = image,
                 Size = vector2_new(24,12),
-                Visible = data[6]
+                Visible = data[6] and tool ~= nil
             })
         end
     end) or LPH_NO_VIRTUALIZE(function(data)
@@ -17026,14 +17034,26 @@ do
                 Transparency = transparencies[status][9],
                 Data = image,
                 Size = vector2_new(24,12),
-                Visible = data[6]
+                Visible = data[6] and tool ~= nil
             })
         end
     end)
 
     local update_tool_icon = LPH_NO_VIRTUALIZE(function(data, tool)
-        if data[2] and data[5][9] then
-            data[5][9]["Data"] = tool and tool_icon_data[tool["Name"]] or ""
+        local icon = data[2] and data[5][9]
+
+        if not icon then
+            return
+        end
+
+        if tool then
+            icon["Data"] = tool_icon_data[tool["Name"]] or ""
+            icon["Visible"] = data[6]
+        else
+            -- > empty-data images render as white squares, hide the icon instead
+
+            icon["Data"] = ""
+            icon["Visible"] = false
         end
     end)
 
@@ -22409,6 +22429,13 @@ do
         local do_void_hide = LPH_JIT_MAX(function(dt, hrp)
             local humanoid = local_parts["Humanoid"]
 
+            -- > purchasing needs clean frames (shop teleport + clickdetector), never fight it
+
+            if purchasing then
+                in_void = false
+                return
+            end
+
             -- > ( deep y )
             -- > deep y: every frame you are sent to a fresh random spot at y -999999999 for one render step, then snapped back
 
@@ -22426,7 +22453,7 @@ do
                     can_deep = true
                 end
 
-                if hrp and can_deep then
+                if hrp and can_deep and not ragebot_force_position then
                     local old_cframe = hrp["CFrame"]
                     local old_velocity = hrp["Velocity"]
                     in_void = true
@@ -25107,7 +25134,12 @@ do
     local ping_data = {}
 
     local update_server_position = LPH_NO_VIRTUALIZE(function(hrp)
-        local_server_position = hrp["CFrame"]
+
+        -- > never sample the character while it is voided, keep the last real position
+
+        if hrp and in_void == false then
+            local_server_position = hrp["CFrame"]
+        end
     end)
 
     local last_fps = clock()
