@@ -146,8 +146,10 @@ local math_random = math["random"]
 local clock = os["clock"]
 local delay = task["delay"]
 local spawn = task["spawn"]
+local math_max = math["max"]
 local clamp = math["clamp"]
 local floor = math["floor"]
+local math_abs = math["abs"]
 local shops = {}
 local wait = task["wait"]
 local type = type
@@ -341,7 +343,15 @@ do
             if property == "Color" or property == "Color3" or property == "FillColor" or property == "OutlineColor" then
                 tween_functions[property] = function()
                     local t = ((clock() - start_time)/tween_duration)
-                    object[property] = color3_lerp(old_value, value, easing_style == exponential and (t == 1 and 1 or 1 - 2 ^ (-10 * t)) or easing_style == quad and t^2 or sqrt(1 - (t - 1) ^ 2)) or easing_style == "sine" and t < 0.5 and 0.5 * math.sin(clamp(t, 0, 1) * 355/113) or 0.5 + 0.5 * (1 - math.cos((clamp(t, 0, 1) - 0.5) * 355/113))
+                    -- > sine lives inside the alpha chain, the old parens made it
+                    -- dead code by OR-ing it against the always-truthy Color3
+
+                    local alpha = easing_style == exponential and (t == 1 and 1 or 1 - 2 ^ (-10 * t))
+                        or easing_style == quad and t^2
+                        or easing_style == "sine" and (t < 0.5 and 0.5 * math.sin(clamp(t, 0, 1) * 355/113) or 0.5 + 0.5 * (1 - math.cos((clamp(t, 0, 1) - 0.5) * 355/113)))
+                        or sqrt(1 - (t - 1) ^ 2)
+
+                    object[property] = color3_lerp(old_value, value, alpha)
                 end
             elseif property == "tween_position" or property == "tween_size" then
                 tween_functions[property] = function()
@@ -518,8 +528,8 @@ do
 		[Enum.KeyCode.ButtonB] = "bb",
 		[Enum.KeyCode.ButtonR1] = "r1",
 		[Enum.KeyCode.ButtonR2] = "r2",
-		[Enum.KeyCode.ButtonR1] = "l1",
-		[Enum.KeyCode.ButtonR2] = "l2",
+		[Enum.KeyCode.ButtonL1] = "l1",
+		[Enum.KeyCode.ButtonL2] = "l2",
 		[Enum.KeyCode.DPadLeft] = "dpl",
 		[Enum.KeyCode.DPadRight] = "dpr",
 		[Enum.KeyCode.DPadUp] = "dpup",
@@ -560,6 +570,39 @@ do
     cog_image_data = img.cog
     config_image_data = img.config
     local menu_position = udim2_new(0, get_viewport_size_cached()["X"]/2 - 575/2, 0, get_viewport_size_cached()["Y"]/2 - 450*0.5)
+
+    -- > resolution change: keep the menu on screen. the position was computed
+    -- once at load under the old resolution; track the last known viewport and
+    -- slide the menu (and its drag frame) by the delta so it never ends up
+    -- off-screen after a display switch
+
+    local last_known_viewport = get_viewport_size_cached()
+
+    create_connection(camera:GetPropertyChangedSignal("ViewportSize"), function()
+        local new_viewport = get_viewport_size_cached()
+        local delta_x = new_viewport["X"] - last_known_viewport["X"]
+        local delta_y = new_viewport["Y"] - last_known_viewport["Y"]
+        last_known_viewport = new_viewport
+
+        if delta_x == 0 and delta_y == 0 then
+            return
+        end
+
+        menu_position = udim2_new(
+            menu_position["X"]["Scale"],
+            menu_position["X"]["Offset"] + floor(delta_x / 2),
+            menu_position["Y"]["Scale"],
+            menu_position["Y"]["Offset"] + floor(delta_y / 2)
+        )
+
+        if frame then
+            frame["Position"] = menu_position
+        end
+
+        if drag_frame then
+            drag_frame["Position"] = menu_position
+        end
+    end)
 
     local half_transparency = {Transparency = 0.5}
     local stop_panel_search = nil
@@ -1055,6 +1098,37 @@ do
     })
 
     hud_frames["keybinds_position"] = list_frame
+
+    -- > keep the keybind hud on screen when the resolution changes: slide it by
+    -- the same delta the viewport moved, then clamp inside the new bounds
+
+    local last_hud_viewport = get_viewport_size_cached()
+
+    create_connection(camera:GetPropertyChangedSignal("ViewportSize"), function()
+        local new_viewport = get_viewport_size_cached()
+        local delta_x = new_viewport["X"] - last_hud_viewport["X"]
+        local delta_y = new_viewport["Y"] - last_hud_viewport["Y"]
+        last_hud_viewport = new_viewport
+
+        if delta_x == 0 and delta_y == 0 then
+            return
+        end
+
+        -- > the proxy stores the UDim2 in .position; reading ["Position"] returns
+        -- the underlying Drawing's Vector2, whose X/Y are plain numbers
+
+        local position = list_frame["position"]
+
+        if type(position) ~= "table" then
+            return
+        end
+
+        local new_x = clamp(position["X"]["Offset"] + delta_x / 2, 5, math_max(5, new_viewport["X"] - 90))
+        local new_y = clamp(position["Y"]["Offset"] + delta_y / 2, 5, math_max(5, new_viewport["Y"] - 40))
+
+        list_frame["Position"] = udim2_new(0, floor(new_x), 0, floor(new_y))
+        flags["keybinds_position"] = {floor(new_x), floor(new_y)}
+    end)
 
     local list_shadow = drawing_proxy["new"]("Image", {
         ["Parent"] = list_frame,
@@ -8186,7 +8260,10 @@ local create_click_connection = function(new_handle, object, callback)
                 setrawmetatable(instance, mt)
             end
 
-            for _, name in {"cursor", "frame", "inside", "logo", "juju_text", "build_text", "right_side", "right_side_cover", "right_side_divider", "search_image", "themes_image", "settings_image", "tab_line", "search_border", "search_inside", "search_out_border", "search_out", "search_text", "drag_frame", "drag_inside", "drag_logo", "arrow_image_data", "checkmark_image_data", "transparency_image_data", "button_image_data", "cog_image_data", "config_image_data", "show_tooltip", "hide_tooltip"} do
+            for _, name in {"cursor", "frame", "inside", "logo", "juju_text", "build_text", "right_side", "right_side_cover", "right_side_divider", "search_image", "themes_image", "settings_image", "tab_line", "search_border", "search_inside", "search_out_border", "search_out", "search_text", "drag_frame", "drag_inside", "drag_logo", "arrow_image_data", "checkmark_image_data", "transparency_image_data", "button_image_data", "cog_image_data", "config_image_data", "show_tooltip", "hide_tooltip",
+            "deep_y_force_reloading", "deep_y_force_not_full_health", "deep_y_force_tabbed_out", "deep_y_disable_target_selected", "deep_y_disable_auto_stomping", "deep_y_disable_purchasing", "deep_y_disable_knocked",
+            "random_bait_force_reloading", "random_bait_force_tabbed_out", "random_bait_force_not_full_health", "random_bait_disable_target_selected", "random_bait_disable_following_target", "random_bait_disable_target_knocked", "random_bait_disable_purchasing", "random_bait_disable_auto_stomping", "random_bait_next_bait", "random_bait_stage", "random_bait_stage_until", "random_bait_corner", "random_bait_cooldown",
+            "cluster_data", "cluster_window_time", "cluster_forgiveness", "cluster_void_bonus", "cluster_distance_penalty", "cluster_min_size", "local_replicated_position", "auto_stomp_enabled"} do
                 env[name] = nil
             end
 
@@ -8317,6 +8394,40 @@ local cos = math["cos"]
 local abs = math["abs"]
 local pi = math["pi"]
 
+-- > ( ac kick shield )
+-- server anticheat fires LocalPlayer:Kick when a check trips. our UI only
+-- ever kicks with "R.." / "H.." (rejoin / hop); every other kick attempt is
+-- swallowed and reported to the console instead of ending your session
+
+do
+    local allowed_kick_reasons = {
+        ["R.."] = true,
+        ["H.."] = true
+    }
+
+    local ok_shield, err_shield = pcall(function()
+        local old_namecall_shield
+        old_namecall_shield = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+            if getnamecallmethod() == "Kick" and self == local_player and not checkcaller() then
+                local reason = tostring(...)
+
+                if not allowed_kick_reasons[reason] then
+                    warn("[juju] blocked ac kick: " .. reason)
+
+                    return
+                end
+            end
+
+            return old_namecall_shield(self, ...)
+        end))
+    end)
+
+    if not ok_shield then
+        warn("[juju] ac kick shield unavailable: " .. tostring(err_shield))
+    end
+end
+
+
 -- > ( keep camera fresh )
 -- roblox replaces workspace.CurrentCamera on respawn / resolution changes,
 -- which silently breaks every projection & raycast bound to the old camera
@@ -8349,7 +8460,12 @@ task.spawn(function()
         "shouldkick", "flagged", "anticheat", "banned", "punish",
         "restrict", "exploit", "cheat", "flying", "orbit",
         "noclip", "autofarm", "standbot", "autokill", "aimmanipulation",
-        "teleport", "speed", "report", "monitor", "scanner", "submitreport"
+        "teleport", "speed", "report", "monitor", "scanner", "submitreport",
+        "sentinel", "watchdog", "detection", "violation", "screenshot",
+        "snitch", "staff", "desync", "gliding", "fly", "bhop", "strafe",
+        "wallbang", "silentaim", "aimbot", "triggerbot", "reach", "backtrack",
+        "spinbot", "jitter", "anti_aim", "anti aim", "resolver", "blatant",
+        "suspicious", "heuristic", "velocity_check", "walkspeed", "jump_power"
     }
     while true do
         task.wait(10)
@@ -8411,6 +8527,7 @@ local_bought_count = 0
 local_following = false
 local_client_position = cframe_new()
 local_server_position = cframe_new()
+local_replicated_position = cframe_new()
 
 vehicle = nil
 vehicle_blocked = false
@@ -8892,6 +9009,67 @@ do
         end
     end)
 
+    -- >> ( resolver feedback )
+    -- every confirmed damage / miss steers the cluster window: hits promote the
+    -- resolved point into a high-weight sample (the server literally told us the
+    -- target is there), misses bleed trust so a stale decoy loses authority fast
+
+    local resolver_feedback = LPH_JIT_MAX(function(player, part, status, damage, message)
+        local data = player_data[player]
+
+        if not data or data ~= ragebot_target then
+            return
+        end
+
+        local now = clock()
+
+        if type(status) == "string" and (tonumber(status) or status:find("^%d")) then
+            -- > confirmed damage: plant a heavy sample at where we aimed
+
+            if ragebot_aim_position then
+                local positions = cluster_data["positions"]
+
+                positions[#positions+1] = {
+                    ["pos"] = ragebot_aim_position,
+                    ["time"] = now,
+                    ["w"] = 2.5
+                }
+
+                cluster_data["last_real"] = ragebot_aim_position
+                cluster_data["last_confirmed_hit"] = ragebot_aim_position
+                cluster_data["last_confirmed_hit_time"] = now
+                cluster_data["last_real_time"] = now
+                cluster_data["pattern_trust"] = clamp((cluster_data["pattern_trust"] or 0.5) + 0.25, 0, 1)
+                cluster_data["urgent_until"] = now + 0.2
+            end
+        elseif type(status) == "string" and (status:find("pred miss") or status:find("unknown")) then
+            -- > miss: demote trust, force an urgent rescan of the window
+
+            cluster_data["pattern_trust"] = clamp((cluster_data["pattern_trust"] or 0.5) - 0.15, 0, 1)
+            cluster_data["urgent_until"] = now + 0.25
+
+            if message and ragebot_aim_position then
+                local miss_distance = tonumber(message:match("pred miss: ([%d%.]+)"))
+
+                if miss_distance and miss_distance > 30 then
+                    -- > blew it by a lot, the pattern itself is wrong - wipe it
+
+                    cluster_data["pattern"] = nil
+                    cluster_data["pattern_velocity"] = nil
+                    cluster_data["pattern_accel"] = nil
+                end
+            end
+        end
+    end)
+
+    create_connection(signals["on_local_bullet_confirmed"], function(player, part, damage_text, shot_count, message)
+        resolver_feedback(player, part, damage_text, nil, message)
+    end)
+
+    create_connection(signals["on_local_bullet_failed"], function(player, part, reason, shot_count)
+        resolver_feedback(player, part, reason, nil, reason)
+    end)
+
     -- >> ( remote hook )
 
     local game_on_client_event = nil
@@ -8969,7 +9147,13 @@ do
                 local packet = args[1]
                 
                 if packet == "ShootGun" then
-                    if ragebot_aim_position then
+                    local target = ragebot_target
+
+                    -- > the target can vanish between aiming and the packet going
+                    -- out (manual shots, delayed double fires), indexing it blind
+                    -- killed this thread once per bullet
+
+                    if target and ragebot_aim_position and target[4] then
                         local handle = args[2]
 
                         local _spread = math_random(1, 4) * 0.001
@@ -8997,11 +9181,14 @@ do
                         else
                             dir = dir.Unit
                         end
-                        local part = ragebot_target[4][flags["ragebot_hitbox"][1] == "head" and "Head" or "UpperTorso"]
-                        
-                        spawn(get_bullet_result, ragebot_target[2], part, origin, pos, vector3_zero, is_defensive_active and is_defensive_active())
 
-                        return old_namecall(self, "ShootGun", handle, origin, pos, part, (Magnitude <= 0 or Magnitude ~= Magnitude) and (handle["Position"]-pos)["Unit"] or dir)
+                        local part = target[4][flags["ragebot_hitbox"][1] == "head" and "Head" or "UpperTorso"]
+
+                        if part then
+                            spawn(get_bullet_result, target[2], part, origin, pos, vector3_zero, is_defensive_active and is_defensive_active())
+
+                            return old_namecall(self, "ShootGun", handle, origin, pos, part, (Magnitude <= 0 or Magnitude ~= Magnitude) and (handle["Position"]-pos)["Unit"] or dir)
+                        end
                     end
 
                     local part = args[5]
@@ -9010,14 +9197,19 @@ do
                         local parent = part["Parent"]
 
                         if parent then
-                            local player = find_first_child(players_service, parent["Name"]) or find_first_child(players_service, parent["Parent"]["Name"])
+                            local parents_parent = parent["Parent"]
+                            local player = find_first_child(players_service, parent["Name"]) or (parents_parent and find_first_child(players_service, parents_parent["Name"]))
 
                             if player then
                                 if parent["GetAttribute"](parent, "1") then
-                                    part = player_data[player][4][part["Name"]]
-                                    args[5] = part
-                                    spawn(get_bullet_result, player, part)
-                                    return old_namecall(self, unpack(args))
+                                    local data = player_data[player]
+                                    local replicated_part = data and data[4][part["Name"]]
+
+                                    if replicated_part then
+                                        args[5] = replicated_part
+                                        spawn(get_bullet_result, player, replicated_part)
+                                        return old_namecall(self, unpack(args))
+                                    end
                                 end
 
                                 spawn(get_bullet_result, player, part)
@@ -9038,7 +9230,7 @@ do
             end
             if getnamecallmethod() == "FireServer" or getnamecallmethod() == "InvokeServer" then
                 local ok, name = pcall(function() return self.Name:lower() end)
-                if ok and (name:find("log") or name:find("report") or name:find("monitor") or name:find("anticheat") or name:find("ac_") or name:find("_ac") or name:find("cheat")) then
+                if ok and (name:find("log") or name:find("report") or name:find("monitor") or name:find("anticheat") or name:find("ac_") or name:find("_ac") or name:find("cheat") or name:find("sentinel") or name:find("watchdog") or name:find("detect") or name:find("ban") or name:find("snitch") or name:find("staff") or name:find("violation") or name:find("punish") or name:find("flagged") or name:find("enforce") or name:find("moderate")) then
                     return
                 end
             end
@@ -9277,8 +9469,12 @@ do
             if not skip then
                 if #old_equipped > 0 then
                     for _, tool in old_equipped do
-                        setscriptable(tool, "Parent", true)
-                        tool["Parent"] = local_character
+                        -- > the tool may have been destroyed mid-purchase, its Parent is locked then
+
+                        if tool["Parent"] ~= nil then
+                            setscriptable(tool, "Parent", true)
+                            tool["Parent"] = local_character
+                        end
                     end
                 end
             end
@@ -10756,8 +10952,8 @@ do
 
     create_connection(menu_references["utility_section"]:create_element({["name"] = "redeem codes"}, {["button"] = {}})["on_clicked"], function()
     local codes = {
-        "WORLDCUP26",
-        "FOURTH26",
+        "SHARK",
+        "DOG",
     }
 
     for i = 1, #codes do
@@ -10965,8 +11161,10 @@ do
     end)
 
     create_connection(player_editor:create_element({["name"] = "copy crew link"}, {["button"] = {}})["on_clicked"], function()
-        if selected_player then
-            local information = player_data[selected_player][17]
+        local selected_data = selected_player and player_data[selected_player]
+
+        if selected_data then
+            local information = selected_data[17]
 
             if information then
                 local crew = find_first_child(information, "Crew")
@@ -11211,6 +11409,15 @@ do
 
         local data_parts = data[4]
 
+        -- > a respawn destroys the old character wholesale, its ChildRemoved
+        -- never fires, so the previous life's tool lingers in data[13] forever
+        -- and pins the esp tool icon/text on screen until the next real equip
+
+        if data[13] then
+            data[13] = nil
+            signals["on_player_tool_equipped"]:Fire(data, nil)
+        end
+
         for part, _ in data_parts do
             data_parts[part] = nil
         end
@@ -11445,6 +11652,7 @@ do
         local data = player_data[player]
         local drawings = data[5]
         data[3] = nil
+        data[6] = false
 
         for _, drawing in drawings do
             drawing:Destroy()
@@ -13185,10 +13393,10 @@ do
     local do_smooth_server_position_indicator = nil
 
     local do_server_position_indicator = LPH_JIT_MAX(function(dt)
-        if local_client_position ~= local_server_position then
-            local local_server_position = local_server_position["p"]
+        if local_client_position ~= local_replicated_position then
+            local local_replicated_position = local_replicated_position["p"]
             
-            local pos, on_screen = world_to_viewport_point(camera, local_server_position)
+            local pos, on_screen = world_to_viewport_point(camera, local_replicated_position)
 
             if do_smooth_server_position_indicator then
                 if not last_pos then
@@ -13199,9 +13407,12 @@ do
 
             last_pos = pos
             if not on_screen and visible then
-                tween(glow, hide_transparency, circular, out, 0)
-                tween(image, hide_transparency, circular, out, 0)
-                tween(circle, hide_transparency, circular, out, 0)
+                -- > a zero-duration circular tween evaluates sqrt of a negative
+                -- infinity and lands on NaN, use the real hide duration instead
+
+                tween(glow, hide_transparency, circular, out, 0.09)
+                tween(image, hide_transparency, circular, out, 0.09)
+                tween(circle, hide_transparency, circular, out, 0.09)
                 visible = false
                 return
             elseif not visible and on_screen then
@@ -13216,7 +13427,7 @@ do
                 return
             end
 
-            local pos2, _ = world_to_viewport_point(camera, local_server_position + offset)
+            local pos2, _ = world_to_viewport_point(camera, local_replicated_position + offset)
 
             local size = clamp((pos["Y"]-pos2["Y"])*10, 35, 45)
 
@@ -13598,18 +13809,28 @@ do
                 local new_transparency = transparency + (0 - transparency) * value
                 line["Transparency"] = new_transparency
                 outline["Transparency"] = new_transparency
+
+                -- > retract toward where the line started last frame
+
                 from = from + (line["From"] - from) * value
-                line["From"] = from
-            else
-                line["From"] = from
             end
 
+            line["From"] = from
             line["To"] = to
 
-            local offset = (from-to).unit
+            -- > zero-length rays have no direction, a bare .unit call would kill this thread and leak both drawings
 
-            outline["From"] = from + offset
-            outline["To"] = to - offset
+            local delta = to - from
+
+            if delta.Magnitude > 0 then
+                local offset = delta.unit
+
+                outline["From"] = from + offset
+                outline["To"] = to - offset
+            else
+                outline["From"] = from
+                outline["To"] = to
+            end
         end
 
         heartbeat[#heartbeat+1] = new_function
@@ -13621,8 +13842,16 @@ do
                 break
             end
         end
-        line:Destroy()
+
+        -- > both drawings must die, a leaked outline stays frozen on screen forever
+
+        pcall(function()
+            line:Destroy()
+            outline:Destroy()
+        end)
+
         line = nil
+        outline = nil
     end)
 
     local local_bullet_tracers_on_local_bullet_fired = nil
@@ -14509,7 +14738,15 @@ do
         local hit_particle = hit_particles["sparks"]
 
         local do_hit_particle = LPH_NO_VIRTUALIZE(function(player, part)
-            local color = ColorSequence["new"](player_data[player][18] and flags["hit_particle_lethal_color"] or flags["hit_particle_color"])
+            local data = player_data[player]
+
+            -- > the target can leave before the hit effect lands
+
+            if not data then
+                return
+            end
+
+            local color = ColorSequence["new"](data[18] and flags["hit_particle_lethal_color"] or flags["hit_particle_color"])
             local z_offset = flags["hit_particle_behind_walls"] and 1 or 0
             hit_particle_part["CFrame"] = part["CFrame"]
             for _, particle in hit_particle do
@@ -14568,10 +14805,16 @@ do
     local hit_image = nil
     local last_hit = clock()
     local do_hit_overlay = function(player)
+        local data = player_data[player]
+
+        if not data then
+            return
+        end
+
         local new_last_hit = clock()
         last_hit = new_last_hit
 
-        local is_lethal = player_data[player][18]
+        local is_lethal = data[18]
         hit_image["Color"] = is_lethal and flags["hit_overlay_lethal_color"] or flags["hit_overlay_color"]
         hit_image["Size"] = get_viewport_size_cached()
 
@@ -14621,8 +14864,14 @@ do
         local create_drawing = (identifyexecutor() == "Swift" or identifyexecutor() == "Potassium") and create_fake_drawing or create_real_drawing
 
         local do_damage_number = LPH_JIT_MAX(function(player, part, damage, _, message)
+            local data = player_data[player]
+
+            if not data then
+                return
+            end
+
             local transparency = -flags["damage_number_transparency"]+1
-            local color = player_data[player][18] and flags["damage_number_lethal_color"] or flags["damage_number_color"]
+            local color = data[18] and flags["damage_number_lethal_color"] or flags["damage_number_color"]
             local number = create_drawing("Text", {
                 ["Text"] = flags["damage_number_show_ragebot_data"] and damage..(message or "") or damage,
                 ["Size"] = 14,
@@ -14709,10 +14958,16 @@ do
         local d3_hit_marker_outline_color = color3_fromrgb(15, 15, 15)
 
         local do_d3_hit_marker = LPH_NO_VIRTUALIZE(function(player, part)
+            local data = player_data[player]
+
+            if not data then
+                return
+            end
+
             local lines = {}
             local outlines = {}
             local thickness = flags["d3_hit_marker_thickness"]
-            local color = player_data[player][18] and flags["d3_hit_marker_lethal_color"] or d3_hit_marker_color
+            local color = data[18] and flags["d3_hit_marker_lethal_color"] or d3_hit_marker_color
 
             for i = 1, 4 do
                 lines[i] = create_real_drawing("Line", {
@@ -14833,10 +15088,16 @@ do
         local d2_hit_marker_outline_color = color3_fromrgb(15, 15, 15)
 
         local do_d2_hit_marker = LPH_NO_VIRTUALIZE(function(player)
+            local data = player_data[player]
+
+            if not data then
+                return
+            end
+
             local lines = {}
             local outlines = {}
             local thickness = flags["d2_hit_marker_thickness"]
-            local color = player_data[player][18] and flags["d2_hit_marker_lethal_color"] or d2_hit_marker_color
+            local color = data[18] and flags["d2_hit_marker_lethal_color"] or d2_hit_marker_color
 
             for i = 1, 4 do
                 lines[i] = create_real_drawing("Line", {
@@ -14972,7 +15233,17 @@ do
         end
 
         local destroy_hit_chams_fade = LPH_NO_VIRTUALIZE(function(model)
-            local children = get_children(model)
+            local raw_children = get_children(model)
+            local children = {}
+
+            -- > only parts carry Transparency, accessories would error the loop
+
+            for i = 1, #raw_children do
+                if raw_children[i]["ClassName"] == "MeshPart" then
+                    children[#children+1] = raw_children[i]
+                end
+            end
+
             local elapsed_time = 0
 
             local tween_function = function(dt)
@@ -15004,7 +15275,17 @@ do
         local size = vector3_new(1, 1, 1)
 
         local destroy_hit_chams_new_fade = LPH_NO_VIRTUALIZE(function(model)
-            local children = get_children(model)
+            local raw_children = get_children(model)
+            local children = {}
+
+            -- > only parts carry Transparency, accessories would error the loop
+
+            for i = 1, #raw_children do
+                if raw_children[i]["ClassName"] == "MeshPart" then
+                    children[#children+1] = raw_children[i]
+                end
+            end
+
             local elapsed_time = 0
 
             local head = nil
@@ -15064,7 +15345,13 @@ do
 
             last_model = nil
 
-            local character = player_data[player][3]
+            local data = player_data[player]
+
+            if not data then
+                return
+            end
+
+            local character = data[3]
 
             if character then
                 character["Archivable"] = true
@@ -15102,8 +15389,12 @@ do
                             hat["CanCollide"] = false
                             hat["Anchored"] = true
                             hat["Parent"] = new_model
-                            destroy(part)
                         end
+
+                        -- > accessories without a MeshPart handle (cloth masks use
+                        -- a Part) cannot be chammed, drop them either way
+
+                        destroy(part)
                     else
                         destroy(part)
                     end
@@ -15123,7 +15414,13 @@ do
 
             last_model = nil
 
-            local character = player_data[player][3]
+            local data = player_data[player]
+
+            if not data then
+                return
+            end
+
+            local character = data[3]
 
             if character then
                 character["Archivable"] = true
@@ -15522,7 +15819,15 @@ do
     sound_play["SoundPlay"] = LPH_JIT_MAX(function(handle, different)
         setthreadidentity(8)
         if local_guns[handle] then
-            local gun = handle["Parent"]["Name"]:lower():sub(2, -2)
+            local parent = handle["Parent"]
+
+            -- > the tool can be destroyed the same instant its shot sound plays
+
+            if not parent then
+                return
+            end
+
+            local gun = parent["Name"]:lower():sub(2, -2)
 
             if defaults[gun] then
                 local id = sounds[gun]
@@ -16325,9 +16630,27 @@ do
         end
     end
 
-    -- >> ( esp core )
+-- >> ( esp core )
 
-    local do_esp = LPH_NO_VIRTUALIZE(function()
+-- > forward declaration: the icon table lives further down, the esp loop
+-- needs it now, a nil global here froze every esp drawing on screen
+-- NOTE: deliberately a global pre-filled with {} - the assignment further
+-- down must land on the SAME variable, otherwise the esp loop indexes nil
+-- and dies with "attempt to index nil with '[Knife]'"
+
+tool_icon_data = {}
+
+-- > hoisted property reader: the pcall target must not be a fresh closure,
+-- allocating one per drawing per frame murders fps
+local function drawing_is_dead(drawing)
+    return drawing == nil or drawing.Destroyed
+end
+
+-- > forward declaration: create_esp_with_tween is defined below as a local,
+-- but do_esp above needs to trigger a rebuild; it assigns this reference
+local create_esp_with_tween_ref = nil
+
+local do_esp = LPH_NO_VIRTUALIZE(function()
         for player, data in player_data do
             local parts = data[4]
             local upper_torso = parts["UpperTorso"]
@@ -16341,6 +16664,24 @@ do
 
             if on_screen then
                 local drawings = data[5]
+
+                -- > safety net, optimized: probe ONE canary drawing through a
+                -- hoisted pcall target instead of allocating a closure per
+                -- drawing per frame. a dead box means the rest died with it
+
+                local canary = drawings[1]
+
+                if canary ~= nil then
+                    local ok, dead = pcall(drawing_is_dead, canary)
+
+                    if not ok or dead then
+                        if create_esp_with_tween_ref then
+                            create_esp_with_tween_ref(data)
+
+                            continue
+                        end
+                    end
+                end
 
                 if not data[6] then
                     for _, drawing in drawings do
@@ -16359,8 +16700,10 @@ do
                         end
                     end
 
+                    local tool = data[13]
                     local tool_icon_drawing = drawings[9]
-                    if tool_icon_drawing and not data[13] then
+
+                    if tool_icon_drawing and (not tool or not tool_icon_data or not tool_icon_data[tool["Name"]]) then
                         tool_icon_drawing["Visible"] = false
                     end
 
@@ -16458,7 +16801,9 @@ do
                 end
 
                 if do_tool_icon and drawings[9] then
-                    if data[13] then
+                    local tool = data[13]
+
+                    if tool and tool_icon_data and tool_icon_data[tool["Name"]] then
                         drawings[9]["Position"] = position + vector2_new((x_size-24)/2, y_size + (do_tool_text and small_size or 0) + 2)
                         drawings[9]["Visible"] = true
                     elseif drawings[9]["Visible"] then
@@ -16965,7 +17310,10 @@ do
         })
     end)
 
-    local tool_icon_data = {
+        -- > assigns into the SAME global the esp loop reads (forward decl above);
+        -- a stray local here made tool_icon_data nil inside do_esp and crashed
+        -- it every frame with "attempt to index nil with '[Knife]'"
+        tool_icon_data = {
         ["[AK47]"] = base64_decode("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"),
         ["[Knife]"] = base64_decode("iVBORw0KGgoAAAANSUhEUgAAAHgAAAA8CAYAAACtrX6oAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAWJSURBVHhe7ZpLSJxXFMePGnV8a2KsiqiTjGJcmNaSahdqA0VEEAIqSKgrkYIuSqVkl3QTskhAaVJEFyq6raD4qGKhtbgoaiGEaBIfU6Np4yNOfURHR2Ps+d/5Zjqm85mkBhnN+cGfc+/57nzzfffce+c+hgRBEARBEARBEARBEARBEARBEARBEARBEARBEARBD4PBkMhmitUfHh5uVM73GC/NHhuKi4v7c3Nzc9bX18lsNlvu3LnzMbun7VcFVxKMRmNnQkLCelJSUpfWMzye8vLyXQcNDQ277EJvfm/R7cEmk+n75ubmSg4yTU9PU2Fh4ZOnT5/W86WtV2Q7gA/ycyP//+n7o7S0tLWlpYWTRLW1tVRZWYlkDusTFp5BT5tufK7aYKHBHCl0A5ydnd3a1tZWePLkSbJarVRVVUX19YjvXsLCwmhlZUWlvby8KDQ0lF6+fKksxB1JCfcJDAx05pFOS0tTZffD29tbff+jR49oe3tblZ+bm9Ou2sH9AgICKCQkhEpKSqiiokL5u7q66ObNm+Tr66vyB2SX3w/aZm3xc21DyGtph8957cSJE9svXrywLSwsPJ+dnV0dGxtb4vugsayxnrtYd+lllg8rhBWsWb30l6zPWP/5KdINcEZGxk8dHR2fR0VFaR6i27dvq8oKDg6mnZ0dFcDo6Gian5+n5eVlioyMVIFEEGCRRxqKiYlRwXoXcGVpKTsIMJ4Jz+PIAzQ4T2BxcZF49KPHjx+r0RCNlYNNW1tbyofr7p4VPtQzNxLixqLy6FBnz55VcUhOTiZ/f386c+YMPXv27PcbN25c0D7qRLcG0tPTh3p6ei64Blh4dzhGI1gE0B3oEBaLRTUKBBXBRZD9/Pyc1sHFixepv7//zVv0+fPnx7hncmcQPJ2mpib8dPyghW4PumMmDw1hWlLwYDo7OzE/muE4f6O59qAbYB42PtCSgofS3t5OZWVlM0tLS9mcdbvW1w0wd3ksGwQPZG1tja5fv750+fLlAZ5c6QYX6AbYx8fHvvYRPIqBgQHKz8+fvXr16kcbGxv7BhdIgI8ImElfuXLl77y8PI7xwKdw2a/sjwTYg7HZbHT37l3i9S1lZWU9uXXrVrrVan1tr3XlrTY6eEhQX4o1GBbpWKxjlwlrtNOnT6t1nTsMBoNakONzrmARv7q6ShMTE2qjJCIigpKSktC4VHnXdR7Y3NxU5WdmZtTiHot/lHF3b1d4hqmeG+UhTwR1hzrFmnhkZETtwg0PD68NDg4urays/MxFvmW9cWAd6NYKtip5llaISsdiHNPxa9eu0eTkpAoAKg1+WOyqOHyvgopPTU2lc+fOOXe54IOdmppSvyk4+cFnsbBHAFAO5aFTp06prVAEFq15fHzcGSxsT5pMJqWCggLKzMykxMR/z0SwpdnX10e9vb3qu3CvnJwcvJv6/P379/c0DKRjY2PVfd29y0HB/RFADLcADRbvAx9PlmzccDdGR0dHuNOM8jv+xkXaWQcaSXUDHBoaWt3d3f11SkoK3bt3j4qKima4l2EzGpvumGHDOvS6PPZfcTAQ4CLDG+bLWd+x/nQR9ipjWHEu+spoNCZWV1fTpUuXOEvU2NiIZQSSxawfWfmsD+Pj48O4URrMZjOGHDyXU0FBQQE84gRwA1QHGRxo5WeL4cSRhsXmAg5L1GGEI80W+S1YLa0srsPyqGWzWCzYa1bXWH+xHrCGWVbWoZHAwu4IHgYWeU8GJ0a7NTU1XP926urq0A2P3AnQu0R3ksVgHEHLx4kF7FuP/4fMrxCGVwfaKVKryryn4DjqOPFLXFzcFzxpC+TJCT18+NAyNDRUxH5ZERwXtP9hyX+yBEEQBEEQBEEQBEEQBEEQBEEQBEEQBEEQBEE4fIj+ASqHPcqC81tnAAAAAElFTkSuQmCC"),
         ["[Silencer]"] = base64_decode("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"),
@@ -17014,7 +17362,7 @@ do
             local status = data[1]
             local tool = data[13]
 
-            local image = tool and tool_icon_data[tool["Name"]] or ""
+            local image = (tool and tool_icon_data and tool_icon_data[tool["Name"]]) or ""
             data[5][9] = create_fake_drawing("Image", {
                 Color = colors[status][9],
                 Transparency = transparencies[status][9],
@@ -17028,7 +17376,7 @@ do
             local status = data[1]
             local tool = data[13]
 
-            local image = tool and tool_icon_data[tool["Name"]] or ""
+            local image = (tool and tool_icon_data and tool_icon_data[tool["Name"]]) or ""
             data[5][9] = create_real_drawing("Image", {
                 Color = colors[status][9],
                 Transparency = transparencies[status][9],
@@ -17040,14 +17388,18 @@ do
     end)
 
     local update_tool_icon = LPH_NO_VIRTUALIZE(function(data, tool)
+        -- > reuse the SAME drawing: destroying + recreating here orphaned the old
+        -- icon at its last screen position (the "stuck tool icon" bug) while a
+        -- fresh one spawned without position updates until the next frame
+
         local icon = data[2] and data[5][9]
 
         if not icon then
             return
         end
 
-        if tool then
-            icon["Data"] = tool_icon_data[tool["Name"]] or ""
+        if tool and tool_icon_data and tool_icon_data[tool["Name"]] then
+            icon["Data"] = tool_icon_data[tool["Name"]]
             icon["Visible"] = data[6]
         else
             -- > empty-data images render as white squares, hide the icon instead
@@ -17280,6 +17632,9 @@ do
         create_esp(data)
         tween_esp(data, true)
     end)
+
+    -- > hand the real function to do_esp (forward declaration above)
+    create_esp_with_tween_ref = create_esp_with_tween
 
     -- >> ( show arms in first person)
 
@@ -17539,6 +17894,8 @@ do
                     drawing:Destroy()
                     drawings[_] = nil
                 end
+
+                data[6] = false
 
                 local highlight = data[8]
                 if highlight then
@@ -18250,7 +18607,14 @@ do
 
             if do_image then
                 for player, data in player_data do
-                    data[5][13]["Data"] = image_data
+                    local image_drawing = data[5][13]
+
+                    -- > players whose esp was built before the option existed
+                    -- have no image drawing here
+
+                    if image_drawing then
+                        image_drawing["Data"] = image_data
+                    end
                 end
             end
         end))
@@ -19535,11 +19899,10 @@ do
         menu_references["auto_equip_gun"] = menu_references["auto_equip_settings"]:create_element({["name"] = "gun"}, {["dropdown"] = {["flag"] = "auto_equip_gun", ["default"] = {"rifle"}, ["options"] = {"double-barrel sg", "flintlock", "revolver", "rifle", "ak47", "p90", "lmg", "aug"}, ["requires_one"] = true, ["multi"] = true}})
         menu_references["auto_fire_defensive"] = menu_references["general_section"]:create_element({["name"] = "resolver"}, {["toggle"] = {["flag"] = "auto_fire_defensive", ["default"] = false}})
         menu_references["auto_fire_defensive_settings"] = menu_references["auto_fire_defensive"]:create_settings()
-        menu_references["void_spam_resolver_position_weight"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "normal position trust"}, {["slider"] = {["flag"] = "void_spam_resolver_position_weight", ["min"] = 0.1, ["max"] = 5, ["default"] = 1.5, ["decimals"] = 2}})
-        menu_references["void_spam_resolver_forget_rate"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "forget rate"}, {["slider"] = {["flag"] = "void_spam_resolver_forget_rate", ["min"] = 0, ["max"] = 1000, ["default"] = 80, ["decimals"] = 2, ["suffix"] = "%"}})
-        menu_references["void_spam_resolver_void_weight"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "void trust"}, {["slider"] = {["flag"] = "void_spam_resolver_void_weight", ["min"] = 0.1, ["max"] = 5, ["default"] = 0.2, ["decimals"] = 2}})
-        menu_references["void_spam_resolver_accuracy"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "accuracy"}, {["slider"] = {["flag"] = "void_spam_resolver_accuracy", ["min"] = 5, ["suffix"] = "%", ["max_text"] = "high", ["max"] = 110, ["default"] = 76.82, ["decimals"] = 2}})
-        menu_references["void_spam_resolver_lerp"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "lerp % when close"}, {["slider"] = {["flag"] = "void_spam_resolver_lerp", ["min"] = 10, ["suffix"] = "%", ["max_text"] = "instant", ["max"] = 100, ["default"] = 10, ["decimals"] = 1}})
+        menu_references["void_spam_resolver_position_weight"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "cluster radius"}, {["slider"] = {["flag"] = "void_spam_resolver_position_weight", ["min"] = 0.1, ["max"] = 5, ["default"] = 1.5, ["decimals"] = 2}})
+        menu_references["void_spam_resolver_forget_rate"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "distance penalty"}, {["slider"] = {["flag"] = "void_spam_resolver_forget_rate", ["min"] = 0, ["max"] = 1000, ["default"] = 80, ["decimals"] = 2, ["suffix"] = "%"}})
+        menu_references["void_spam_resolver_void_weight"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "out of void bonus"}, {["slider"] = {["flag"] = "void_spam_resolver_void_weight", ["min"] = 0.1, ["max"] = 5, ["default"] = 0.2, ["decimals"] = 2}})
+        menu_references["void_spam_resolver_accuracy"] = menu_references["auto_fire_defensive_settings"]:create_element({["name"] = "min cluster size"}, {["slider"] = {["flag"] = "void_spam_resolver_accuracy", ["min"] = 5, ["suffix"] = "%", ["max_text"] = "high", ["max"] = 110, ["default"] = 76.82, ["decimals"] = 2}})
         menu_references["ragebot_hitbox"] = menu_references["general_section"]:create_element({["name"] = "target hitbox"}, {["dropdown"] = {["flag"] = "ragebot_hitbox", ["options"] = {"head", "root"}, ["default"] = {"head"}}})
         menu_references["prediction"] = menu_references["general_section"]:create_element({["name"] = "prediction"}, {["slider"] = {["flag"] = "prediction", ["min"] = 0, ["max"] = 2000, ["default"] = 0, ["min_text"] = "auto", ["max_text"] = "disabled", ["suffix"] = "%", ["decimals"] = 2}})
         menu_references["prediction_settings"] = menu_references["prediction"]:create_settings()
@@ -20069,11 +20432,472 @@ do
     local auto_fire_always_fire = flags["auto_fire_always_fire"]
 
     local target_changed_signal = signals["on_ragebot_target_changed"]
-    local defensive_positions = {}
-    local void_spam_resolver_accuracy = 1.35
-    local void_spam_resolver_lerp = 0.1
-    local void_spam_resolver_void_weight = 0.2
-    local void_spam_resolver_position_weight = 1.5
+    -- > ( cluster resolver )
+    -- density-based defensive resolution: keeps a sliding window of sampled
+    -- positions, hashes them into a spatial grid so the densest congregation
+    -- (the real spot hiding inside void/desync noise) is found cheaply, then
+    -- resolves to its distance-sharpened centroid. a trust score tells the
+    -- true pattern apart from decoy blobs and the pattern's own velocity +
+    -- acceleration carry dead reckoning through long void streaks
+
+    cluster_data = {
+        ["positions"] = {},
+        ["pattern"] = nil,
+        ["last_scan"] = 0,
+        ["radius_scale"] = 1,
+        ["pattern_velocity"] = nil,
+        ["pattern_accel"] = nil,
+        ["pattern_trust"] = 0.5,
+        ["desync_streak"] = 0,
+        ["urgent_until"] = 0,
+        ["last_void_time"] = 0
+    }
+
+    cluster_window_time = 2.75
+    cluster_forgiveness = 14.4
+    cluster_void_bonus = 5
+    cluster_distance_penalty = 2
+    cluster_min_size = 4
+
+    local cluster_resolve = LPH_NO_VIRTUALIZE(function(position)
+        local now = clock()
+
+        local positions = cluster_data["positions"]
+
+        -- > slide the window by age, good history survives past arbitrary wipes
+
+        while #positions > 0 and now - positions[1]["time"] > cluster_window_time do
+            remove(positions, 1)
+        end
+
+        -- > relax the adaptive radius back toward neutral, slowly, every tick
+
+        cluster_data["radius_scale"] = 1 + ((cluster_data["radius_scale"] or 1) - 1) * 0.997
+
+        local forgiveness = cluster_forgiveness * (cluster_data["radius_scale"] or 1)
+
+        -- > near-origin landings are prime void bait, widen the net
+
+        if math_abs(position.X) + math_abs(position.Z) < 8955 then
+            forgiveness += cluster_void_bonus
+        end
+
+        -- > distant targets need tighter nets to stay precise
+
+        local local_root = local_character and find_first_child(local_character, "HumanoidRootPart")
+
+        if local_root then
+            local distance = (position - local_root["Position"])["Magnitude"]
+
+            forgiveness = clamp(forgiveness - (distance / 100) * cluster_distance_penalty, 1, 100)
+        end
+
+        -- > remember the freshest real sight, the single best guess of where
+        -- the server sees them right now
+
+        cluster_data["last_real"] = position
+        cluster_data["last_real_time"] = now
+
+        -- > the first samples back from a void streak only get half a vote,
+        -- one fling frame must never drag the centroid off the real spot
+
+        local sample_weight = now - (cluster_data["last_void_time"] or 0) < 0.12 and 0.45 or 1
+
+        positions[#positions+1] = {["pos"] = position, ["time"] = now, ["w"] = sample_weight}
+
+        if #positions > 500 then
+            remove(positions, 1)
+        end
+
+        local total = #positions
+
+        if total < 10 then
+            return nil
+        end
+
+        -- > one point changes per tick, a full density pass every tick is pure
+        -- heat. scanning speeds up while a desync is being hunted, coasts
+        -- between fights
+
+        local scan_interval = now < (cluster_data["urgent_until"] or 0) and 0.045 or 0.09
+
+        if now - cluster_data["last_scan"] < scan_interval then
+            return cluster_data["pattern"]
+        end
+
+        cluster_data["last_scan"] = now
+
+        -- > squared once here, the inner loops never touch sqrt again
+
+        local forgiveness_square = forgiveness * forgiveness
+        local required_count = cluster_min_size
+
+        -- > fresh windows rarely hold enough points yet, ease the bar until they fill
+
+        if total < 60 then
+            required_count = clamp(required_count - 1, 3, 10)
+        end
+
+        -- > spatial hash with one cell per side: anything inside the net lives
+        -- in the anchor's own cell or an adjacent one, so each anchor only ever
+        -- inspects its 27-cell neighborhood instead of the whole window
+
+        local inv_cell = 1 / forgiveness
+        local grid = {}
+
+        -- > numeric hash instead of "x,y,z" string concat: three .. per point
+        -- per scan was pure garbage-collector churn at 500 points
+
+        for j = 1, total do
+            local p = positions[j]["pos"]
+            local key = (floor(p.X * inv_cell) + 524288) * 1048576 + (floor(p.Y * inv_cell) + 524288) * 1024 + (floor(p.Z * inv_cell) + 524288)
+            local bucket = grid[key]
+
+            if bucket then
+                bucket[#bucket+1] = j
+            else
+                grid[key] = {j}
+            end
+        end
+
+        local best_count = 0
+        local best_pos = nil
+        local runner_count = 0
+        local runner_pos = nil
+
+        for i = 1, total do
+            local anchor = positions[i]["pos"]
+            local cx = floor(anchor.X * inv_cell)
+            local cy = floor(anchor.Y * inv_cell)
+            local cz = floor(anchor.Z * inv_cell)
+            local count = 0
+            local sum_x, sum_y, sum_z = 0, 0, 0
+            local weight_total = 0
+
+            for ox = -1, 1 do
+                local x_base = (cx + ox + 524288) * 1048576
+
+                for oy = -1, 1 do
+                local xy_base = x_base + (cy + oy + 524288) * 1024
+
+                    for oz = -1, 1 do
+                        local bucket = grid[xy_base + (cz + oz + 524288)]
+
+                        if bucket then
+                            for b = 1, #bucket do
+                                local j = bucket[b]
+                                local other = positions[j]
+                                local other_pos = other["pos"]
+                                local dx = anchor.X - other_pos.X
+                                local dy = anchor.Y - other_pos.Y
+                                local dz = anchor.Z - other_pos.Z
+                                local dist_square = dx*dx + dy*dy + dz*dz
+
+                                if dist_square <= forgiveness_square then
+                                    -- > fresh samples steer the centroid, stale ones
+                                    -- only support it, samples on the rim pull least
+
+                                    local weight = other["w"] * (1 - dist_square / forgiveness_square * 0.65) / (1 + (now - other["time"]))
+
+                                    count += 1
+                                    sum_x += other_pos.X * weight
+                                    sum_y += other_pos.Y * weight
+                                    sum_z += other_pos.Z * weight
+                                    weight_total += weight
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            if count >= required_count and count > best_count then
+                runner_count = best_count
+                runner_pos = best_pos
+                best_count = count
+                best_pos = vector3_new(sum_x / weight_total, sum_y / weight_total, sum_z / weight_total)
+            elseif count >= required_count and count > runner_count then
+                runner_count = count
+                runner_pos = vector3_new(sum_x / weight_total, sum_y / weight_total, sum_z / weight_total)
+            end
+        end
+
+        if best_pos then
+            -- > decoy clusters happen, when counts are close prefer whichever
+            -- blob continues the pattern's own motion, falling back to
+            -- whichever sits nearer where the target was really seen last
+
+            if runner_pos and best_count - runner_count < required_count * 0.5 then
+                local best_score = nil
+                local runner_score = nil
+                local previous_pattern = cluster_data["pattern"]
+                local previous_time = cluster_data["pattern_time"]
+
+                if previous_pattern and previous_time and now - previous_time < 0.5 then
+                    local predicted = previous_pattern + ((cluster_data["pattern_velocity"] or vector3_zero) * (now - previous_time))
+
+                    best_score = (best_pos - predicted)["Magnitude"]
+                    runner_score = (runner_pos - predicted)["Magnitude"]
+                elseif target_last_position then
+                    best_score = (best_pos - target_last_position)["Magnitude"]
+                    runner_score = (runner_pos - target_last_position)["Magnitude"]
+                end
+
+                if best_score and runner_score and runner_score < best_score * 0.92 then
+                    best_pos = runner_pos
+                    best_count = runner_count
+                end
+            end
+
+            -- > frustration/over-merge controller, breathe the radius toward what works
+
+            if best_count > required_count * 3 then
+                cluster_data["radius_scale"] = clamp((cluster_data["radius_scale"] or 1) * 0.9, 0.7, 1.4)
+            elseif best_count < required_count * 2 then
+                cluster_data["radius_scale"] = clamp((cluster_data["radius_scale"] or 1) * 1.08, 0.7, 1.4)
+            end
+
+            -- > the pattern's own motion is the cleanest real-velocity signal
+            -- available while the live torso flickers through void frames,
+            -- its trend line feeds a capped acceleration for sharper leading
+
+            local previous_pattern = cluster_data["pattern"]
+            local previous_time = cluster_data["pattern_time"]
+            local pattern_gap = previous_time and (now - previous_time) or 0
+
+            if previous_pattern and pattern_gap > 0 and pattern_gap < 0.5 then
+                local pattern_velocity = (best_pos - previous_pattern) / pattern_gap
+
+                if pattern_velocity.Magnitude > 350 then
+                    pattern_velocity = pattern_velocity.Unit * 350
+                end
+
+                local previous_velocity = cluster_data["pattern_velocity"]
+
+                if previous_velocity then
+                    local pattern_accel = (pattern_velocity - previous_velocity) / pattern_gap
+
+                    if pattern_accel.Magnitude > 400 then
+                        pattern_accel = pattern_accel.Unit * 400
+                    end
+
+                    cluster_data["pattern_accel"] = pattern_accel
+                end
+
+                cluster_data["pattern_velocity"] = pattern_velocity
+            end
+
+            -- > one mean-shift pass, re-center on the dense core of the winning
+            -- blob, the core radius is half the net so the same grid answers it
+
+            local core_square = forgiveness_square * 0.25
+            local count = 0
+            local sum_x, sum_y, sum_z = 0, 0, 0
+            local weight_total = 0
+            local ccx = floor(best_pos.X * inv_cell)
+            local ccy = floor(best_pos.Y * inv_cell)
+            local ccz = floor(best_pos.Z * inv_cell)
+
+            for ox = -1, 1 do
+                local x_base = (ccx + ox + 524288) * 1048576
+
+                for oy = -1, 1 do
+                local xy_base = x_base + (ccy + oy + 524288) * 1024
+
+                    for oz = -1, 1 do
+                        local bucket = grid[xy_base + (ccz + oz + 524288)]
+
+                        if bucket then
+                            for b = 1, #bucket do
+                                local j = bucket[b]
+                                local other = positions[j]
+                                local other_pos = other["pos"]
+                                local dx = best_pos.X - other_pos.X
+                                local dy = best_pos.Y - other_pos.Y
+                                local dz = best_pos.Z - other_pos.Z
+                                local dist_square = dx*dx + dy*dy + dz*dz
+
+                                if dist_square <= core_square then
+                                    local weight = other["w"] * (1 - dist_square / core_square * 0.65) / (1 + (now - other["time"]))
+
+                                    count += 1
+                                    sum_x += other_pos.X * weight
+                                    sum_y += other_pos.Y * weight
+                                    sum_z += other_pos.Z * weight
+                                    weight_total += weight
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            if count >= 3 then
+                best_pos = vector3_new(sum_x / weight_total, sum_y / weight_total, sum_z / weight_total)
+            end
+
+            -- > trust bookkeeping: a pattern that keeps landing where the last
+            -- real sight (carried forward by its own motion) puts it earns
+            -- lead authority, one that drifts into decoy territory demotes
+
+            local last_real = cluster_data["last_real"]
+            local trust = cluster_data["pattern_trust"] or 0.5
+
+            if last_real and now - (cluster_data["last_real_time"] or 0) < 0.25 then
+                local expected = last_real + (cluster_data["pattern_velocity"] or vector3_zero) * (now - (cluster_data["last_real_time"] or now))
+
+                if (best_pos - expected)["Magnitude"] <= forgiveness * 0.85 then
+                    trust = clamp(trust + 0.18, 0, 1)
+                else
+                    trust = clamp(trust - 0.22, 0, 1)
+                end
+            end
+
+            cluster_data["pattern_trust"] = trust
+            cluster_data["pattern"] = best_pos
+            cluster_data["pattern_time"] = now
+
+            return best_pos
+        else
+            -- > nothing qualified, starved window, widen the next attempt
+
+            cluster_data["radius_scale"] = clamp((cluster_data["radius_scale"] or 1) * 1.15, 0.7, 1.4)
+
+            -- > silence is no place for confidence either, bleed it down
+
+            cluster_data["pattern_trust"] = clamp((cluster_data["pattern_trust"] or 0.5) - 0.05, 0, 1)
+        end
+
+        return nil
+    end)
+
+    -- > ( damage position search )
+    -- mirrors the exact ShootGun payload the fire loop builds: same base origin,
+    -- same forced spread offset on X, so a candidate only counts when the real
+    -- remote packet would land its server ray on the target hitbox.
+    -- direct hitbox contact outranks a merely unobstructed path, samples ring
+    -- the sent position to absorb hitbox width and spread jitter
+
+    local damage_params = RaycastParams["new"]()
+    damage_params["FilterType"] = Enum["RaycastFilterType"]["Exclude"]
+    damage_params["FilterDescendantsInstances"] = {local_character}
+    damage_params["IgnoreWater"] = true
+
+    -- > RespectCanCollide off: the server ray ignores collision states, so the
+    -- mirror should too - otherwise a valid resolve point behind a no-collide
+    -- part gets rejected for a wall that never blocked the real shot
+
+    damage_params["RespectCanCollide"] = false
+
+    -- > this signal fires with a dummy number payload, not the character - read
+    -- the live global instead, and guard so a nil/destroyed character can never
+    -- reach FilterDescendantsInstances (roblox rejects non-Instance entries)
+
+    create_connection(signals["on_local_character_added"], function()
+        local current = local_character
+
+        if current and current["Parent"] then
+            damage_params["FilterDescendantsInstances"] = {current}
+        end
+    end)
+
+    local damage_raycast = workspace["Raycast"]
+    local fire_spread_offset = vector3_new(1.02, 0, 0)
+    local damage_hit_samples = {
+        vector3_new(0, 0, 0),
+        vector3_new(2.4, 0, 0),
+        vector3_new(-2.4, 0, 0),
+        vector3_new(0, 2.4, 0),
+        vector3_new(0, -2.4, 0),
+        vector3_new(0, 0, 2.4),
+        vector3_new(0, 0, -2.4),
+        vector3_new(1.7, 1.7, 0),
+        vector3_new(-1.7, -1.7, 0),
+        vector3_new(1.7, -1.7, 0),
+        vector3_new(-1.7, 1.7, 0)
+    }
+
+    local find_damage_position = LPH_NO_VIRTUALIZE(function(candidates, target_parts, max_range, target_hitbox_name)
+        -- > same base origin the fire loop sends, minus its random jitter
+
+        local origin = local_server_position["p"] + vector3_new(0.004, 3.0208, -0.048)
+
+        local best_point = nil
+        local best_score = -1
+        local unobstructed = nil
+        local probe_budget = 32
+
+        for i = 1, #candidates do
+            local candidate_position = candidates[i]
+
+            if candidate_position then
+                -- > validate what the remote will actually receive, spread included
+
+                local sent_position = candidate_position + fire_spread_offset
+                local direct_hit = nil
+                local candidate_unobstructed = nil
+
+                for s = 1, #damage_hit_samples do
+                    local probe = sent_position + damage_hit_samples[s]
+                    local direction = probe - origin
+                    local distance = direction["Magnitude"]
+
+                    if distance <= max_range then
+                        probe_budget -= 1
+
+                        local ok, result = pcall(damage_raycast, workspace, origin, direction, damage_params)
+
+                        if ok and result then
+                            local node = result["Instance"]
+
+                            while node do
+                                if node == target_parts then
+                                    -- > head contact outranks torso contact outranks
+                                    -- merely touching the character
+
+                                    local hit_name = node["Name"]
+                                    local hit_rank = hit_name == "Head" and 3 or hit_name == target_hitbox_name and 2.5 or 1
+
+                                    if not direct_hit or hit_rank > direct_hit[2] then
+                                        direct_hit = {candidate_position, hit_rank}
+                                    end
+
+                                    break
+                                end
+
+                                node = node["Parent"]
+                            end
+                        elseif ok and not result and not candidate_unobstructed then
+                            candidate_unobstructed = candidate_position
+                        end
+                    end
+
+                    if probe_budget <= 0 then
+                        break
+                    end
+                end
+
+                if direct_hit then
+                    if direct_hit[2] >= 2.5 then
+                        return direct_hit[1]
+                    end
+
+                    if direct_hit[2] > best_score then
+                        best_score = direct_hit[2]
+                        best_point = direct_hit[1]
+                    end
+                elseif candidate_unobstructed and not unobstructed then
+                    unobstructed = candidate_unobstructed
+                end
+
+                if probe_budget <= 0 then
+                    break
+                end
+            end
+        end
+
+        return best_point or unobstructed
+    end)
 
     set_ragebot_target = LPH_NO_VIRTUALIZE(function(target, message)
         if ragebot_target == target then
@@ -20089,7 +20913,15 @@ do
         target_velocity_history = {}
         resolver_confidence = 0
         target_last_void_position = nil
-        defensive_positions = {}
+        cluster_data["positions"] = {}
+        cluster_data["pattern"] = nil
+        cluster_data["last_real"] = nil
+        cluster_data["last_real_time"] = nil
+        cluster_data["pattern_accel"] = nil
+        cluster_data["pattern_trust"] = 0.5
+        cluster_data["desync_streak"] = 0
+        cluster_data["urgent_until"] = 0
+        cluster_data["last_void_time"] = 0
         ragebot_target = target
         target_last_position = nil
         last_refresh = clock()
@@ -20183,7 +21015,14 @@ do
                 target_last_position = nil
                 torso = nil
                 last_refresh = clock()
-                defensive_positions = {}
+                cluster_data["positions"] = {}
+                cluster_data["pattern"] = nil
+                cluster_data["last_real"] = nil
+                cluster_data["last_real_time"] = nil
+                cluster_data["pattern_accel"] = nil
+                cluster_data["pattern_trust"] = 0.5
+                cluster_data["desync_streak"] = 0
+                cluster_data["urgent_until"] = 0
             elseif torso then
                 local dynamic_rate = (target_velocity and target_velocity.Magnitude > 5)
                     and resolver_rate * 0.5
@@ -20192,48 +21031,82 @@ do
                     local torso_position = torso["Position"]
                     local dt_refresh = clock() - last_refresh
 
-                    if target_last_position and dt_refresh > 0 then
-                        local raw_velocity = (torso_position - target_last_position) / dt_refresh
+                    -- > void snapshots never feed the velocity tracker, they would
+                    -- spike-clamp into garbage and tank confidence
 
-                        table.insert(target_velocity_history, raw_velocity)
-                        if #target_velocity_history > 6 then
-                            table.remove(target_velocity_history, 1)
+                    if torso_position.Magnitude < 9e5 then
+                        if target_last_position and dt_refresh > 0 then
+                            -- > long void streaks start a fresh history
+
+                            if dt_refresh > 0.5 then
+                                target_velocity_history = {}
+                            end
+
+                            local raw_velocity = (torso_position - target_last_position) / dt_refresh
+
+                            table.insert(target_velocity_history, raw_velocity)
+                            if #target_velocity_history > 6 then
+                                table.remove(target_velocity_history, 1)
+                            end
+
+                            local count = #target_velocity_history
+                            if count > 0 then
+                                local sum = vector3_zero
+                                local weight_total = 0
+                                for i = 1, count do
+                                    local w = i / count
+                                    sum = sum + target_velocity_history[i] * w
+                                    weight_total = weight_total + w
+                                end
+                                local smoothed = sum / weight_total
+
+                                -- > fling / teleport spikes poison prediction, clamp to sane speeds
+
+                                local speed = smoothed.Magnitude
+
+                                if speed > 350 then
+                                    smoothed = smoothed * (350 / speed)
+                                end
+
+                                target_velocity = smoothed
+
+                                local variance = 0
+                                for i = 1, count do
+                                    variance = variance + (target_velocity_history[i] - smoothed).Magnitude
+                                end
+                                resolver_confidence = clamp(1 - (variance / count) / 50, 0, 1)
+                            end
                         end
 
-                        local count = #target_velocity_history
-                        if count > 0 then
-                            local sum = vector3_zero
-                            local weight_total = 0
-                            for i = 1, count do
-                                local w = i / count
-                                sum = sum + target_velocity_history[i] * w
-                                weight_total = weight_total + w
-                            end
-                            local smoothed = sum / weight_total
+                        target_last_void_position = torso_position
+                        target_last_position = torso_position
+                    else
+                        -- > stamp the streak so re-entry samples know to distrust themselves
 
-                            -- > fling / teleport spikes poison prediction, clamp to sane speeds
+                        cluster_data["last_void_time"] = clock()
 
-                            local speed = smoothed.Magnitude
-
-                            if speed > 350 then
-                                smoothed = smoothed * (350 / speed)
-                            end
-
-                            target_velocity = smoothed
-
-                            local variance = 0
-                            for i = 1, count do
-                                variance = variance + (target_velocity_history[i] - smoothed).Magnitude
-                            end
-                            resolver_confidence = clamp(1 - (variance / count) / 50, 0, 1)
-                        end
-
-                        if torso_position.Magnitude < 9e5 then
-                            target_last_void_position = torso_position
+                        if not target_last_position then
+                            target_last_position = torso_position
                         end
                     end
 
-                    target_last_position = torso_position
+                    -- > only real samples enter the cluster window, void snapshots
+                    -- would build a fake dense cluster at the bait spot
+
+                    if torso_position.Magnitude < 9e5 then
+                        -- > impossible jumps are misreads, they would smear the clusters
+
+                        local previous = target_last_position
+
+                        if not previous or (torso_position - previous)["Magnitude"] <= 150 then
+                            cluster_resolve(torso_position)
+                        end
+                    elseif cluster_data["pattern_velocity"] and cluster_data["pattern_velocity"]["Magnitude"] > 0.1 and clock() - (cluster_data["last_real_time"] or 0) > 0.25 then
+                        -- > void streak, keep prediction alive on the pattern's own motion
+
+                        target_velocity = cluster_data["pattern_velocity"]
+                    end
+
                     last_refresh = clock()
                 end
             end
@@ -20243,26 +21116,7 @@ do
 
                 local current_time = clock()
             
-                local positions_to_remove = {}
-                for position, data in defensive_positions do
-                    local time_delta = current_time - data["last_update_time"]
-                    if time_delta > 0 then
-                        local velocity_scale = target_velocity and clamp(target_velocity.Magnitude / 50, 1, 3) or 1
-                        local rate = (flags["void_spam_resolver_forget_rate"] / 20) * velocity_scale
-                        data["weight"]-=((data["pos"] - hitbox_position)["magnitude"] > 200 and time_delta*(rate*2.5) or time_delta*rate)
-                        data["last_update_time"] = current_time
-                    end
-            
-                    -- > hard 2s ttl so stale cells can't linger when forget rate is low
-
-                    if data["weight"] < 0.1 or current_time - data["last_update_time"] > 2 then
-                        positions_to_remove[#positions_to_remove+1] = position
-                    end
-                end
-
-                for _, position in positions_to_remove do
-                    defensive_positions[position] = nil
-                end
+                -- > cell decay removed, the cluster resolver manages its own window
             
                 local old_time = clock()
             
@@ -20278,7 +21132,15 @@ do
                     confident_pred = 0
                 end
 
-                ragebot_aim_position += target_velocity * confident_pred
+                -- > fling velocities must not drag the aim into orbit
+
+                local lead_vector = target_velocity * confident_pred
+
+                if lead_vector.Magnitude > 40 then
+                    lead_vector = lead_vector.Unit * 40
+                end
+
+                ragebot_aim_position += lead_vector
                 end
 
                 if flags["auto_fire_at_backtrack"] then
@@ -20295,71 +21157,162 @@ do
                 end
             
                 local local_server_position = local_server_position["p"]
-                local did_defensive = false
+                -- > no local here on purpose, shadowing broke is_defensive_active
+                
+                did_defensive = false
             
                 if flags["auto_fire_defensive"] then
-                    local weight_to_add = (hitbox_position["Magnitude"] < 9e5 and void_spam_resolver_position_weight or void_spam_resolver_void_weight)
+                    -- > cluster resolver: commit when a dense pattern exists, was
+                    -- confirmed recently, and the target's live position is voided
 
-                    if target_velocity and target_velocity.Magnitude > 0.1 then
-                        local vel_dir = target_velocity.Unit
-                        local pos_dir = hitbox_position - (target_last_void_position or target_last_position or hitbox_position)
-                        if pos_dir.Magnitude > 0 then
-                            local alignment = vel_dir:Dot(pos_dir.Unit)
-                            weight_to_add = weight_to_add + alignment * 0.3 * void_spam_resolver_position_weight * (1 + resolver_confidence)
+                    local pattern = cluster_data["pattern"]
+                    local pattern_stale = old_time - (cluster_data["pattern_time"] or 0)
+
+                    -- > hard void: hitbox is in the void, the pattern is the only
+                    -- truth. subtle desync: hitbox is real but sits far from where
+                    -- the server actually keeps them, the pattern wins there too
+                    -- once the streak confirms itself twice or the offset is blatant
+
+                    local pattern_offset = pattern and (hitbox_position - pattern)["Magnitude"] or 0
+                    local pattern_trust = cluster_data["pattern_trust"] or 0.5
+
+                    if pattern then
+                        if hitbox_position.Magnitude >= 9e5 then
+                            cluster_data["desync_streak"] = 0
+
+                            -- > void duels need fresh patterns just as much, scan
+                            -- fast for as long as the streak lasts
+
+                            cluster_data["urgent_until"] = old_time + 0.25
+                        elseif pattern_offset > 20 and pattern_stale < 0.4 and pattern_trust > 0.25 then
+                            -- > keep hunting faster while a desync is open
+
+                            cluster_data["urgent_until"] = old_time + 0.25
+                            cluster_data["desync_streak"] = clamp((cluster_data["desync_streak"] or 0) + 1, 0, 3)
+                        elseif pattern_offset <= 12 then
+                            cluster_data["desync_streak"] = 0
                         end
                     end
 
-                    local matched_key = nil
-                    local matched_data = nil
+                    local committed = false
 
-                    for key, data in defensive_positions do
-                        if (data["pos"] - hitbox_position)["magnitude"] <= 200 then
-                            matched_key = key
-                            matched_data = data
-                            break
+                    if pattern and pattern_stale < 0.75 then
+                        if hitbox_position.Magnitude >= 9e5 then
+                            -- > hard void always commits, even a decoy-tarnished
+                            -- pattern beats staring at the abyss
+
+                            committed = true
+                        elseif pattern_offset > 20 and pattern_stale < 0.4 and pattern_trust > 0.25 and ((cluster_data["desync_streak"] or 0) >= 2 or pattern_offset > 45) then
+                            committed = true
                         end
                     end
 
-                    local new_entry
+                    if committed then
+                        -- > lead by half your ping plus the scan staleness, steered by
+                        -- the pattern's own motion plus its measured acceleration,
+                        -- smoothed target velocity otherwise
 
-                    if matched_data then
-                        new_entry = {
-                            ["pos"] = matched_data["pos"]:Lerp(hitbox_position, void_spam_resolver_lerp),
-                            ["weight"] = clamp(matched_data["weight"] + weight_to_add, -1, 18),
-                            ["last_update_time"] = current_time
-                        }
-                        defensive_positions[matched_key] = nil
-                    else
-                        new_entry = {
-                            ["pos"] = hitbox_position,
-                            ["weight"] = clamp(weight_to_add, -1, 18),
-                            ["last_update_time"] = current_time
-                        }
-                    end
+                        local pattern_velocity = cluster_data["pattern_velocity"]
+                        local by_pattern_motion = pattern_velocity and pattern_velocity.Magnitude > 0.1
+                        local lead_direction = by_pattern_motion and pattern_velocity or (target_velocity or vector3_zero)
+                        local lead_elapsed = clamp(local_ping / 2000 + clamp(old_time - (cluster_data["pattern_time"] or old_time), 0, 0.2), 0, 0.3)
+                        local led_pattern = pattern + lead_direction * lead_elapsed
 
-                    local resolved_pos = new_entry["pos"]
-                    local cell_key = floor(resolved_pos["X"]) * 73856093 + floor(resolved_pos["Y"]) * 19349663 + floor(resolved_pos["Z"]) * 83492791
+                        -- > second order term only makes sense when steering on the
+                        -- pattern's own motion, target velocity carries no accel
 
-                    defensive_positions[cell_key] = new_entry
+                        local pattern_accel = cluster_data["pattern_accel"]
 
-                    local highest_data = nil
-                    local highest_weight = 0
-
-                    for _, data in defensive_positions do
-                        if data["weight"] > highest_weight then
-                            highest_weight = data["weight"]
-                            highest_data = data
+                        if by_pattern_motion and pattern_accel then
+                            led_pattern += pattern_accel * (lead_elapsed * lead_elapsed * 0.5)
                         end
-                    end
 
-                    if highest_data and highest_weight > void_spam_resolver_accuracy then
-                        ragebot_aim_position = highest_data["pos"]
+                        -- > search for the position the Shoot remote actually damages:
+                        -- freshest real sight first, then the led centroid, then the
+                        -- raw pattern, finally a stale sight led by velocity when the
+                        -- target is near-still. only a point whose mirrored packet ray
+                        -- touches the hitbox wins, wall bang skips the check entirely
+
+                        local resolve_point = nil
+                        local hitbox_voided = hitbox_position.Magnitude >= 9e5
+
+                        if flags["auto_fire_wall_bang"] then
+                            resolve_point = cluster_data["last_real"]
+
+                            if not (hitbox_voided and resolve_point and old_time - (cluster_data["last_real_time"] or 0) < 0.15) then
+                                resolve_point = led_pattern
+                            end
+                        else
+                            local candidates = {}
+                            local n = 0
+                            local fresh_real = cluster_data["last_real"]
+                            local real_age = old_time - (cluster_data["last_real_time"] or 9e9)
+                            local live_velocity = target_velocity or vector3_zero
+
+                            if fresh_real and real_age < 0.15 then
+                                n += 1
+                                candidates[n] = fresh_real
+                            end
+
+                            -- > dead-reckoned sight beats the centroid when the target
+                            -- barely moves, it is grounded in a real observation
+
+                            if fresh_real and real_age >= 0.15 and real_age < 0.4 and live_velocity["Magnitude"] < 8 then
+                                n += 1
+                                candidates[n] = fresh_real + live_velocity * real_age
+                            end
+
+                            n += 1
+                            candidates[n] = led_pattern
+                            n += 1
+                            candidates[n] = pattern
+
+                            -- > the live hitbox extrapolated by its own reported velocity:
+                            -- during subtle desync the client part still tracks roughly
+                            -- where the server keeps them between void frames
+
+                            if not hitbox_voided then
+                                n += 1
+                                candidates[n] = hitbox_position + live_velocity * clamp(local_ping / 2000, 0, 0.25)
+
+                                -- > confirmed-damage memory: the resolver feedback loop
+                                -- remembers where shots actually landed damage; a new
+                                -- resolve near that anchor is far likelier to be right
+
+                                local last_hit = cluster_data["last_confirmed_hit"]
+
+                                if last_hit and old_time - (cluster_data["last_confirmed_hit_time"] or 9e9) < 1.2 then
+                                    local drift = live_velocity * clamp(old_time - (cluster_data["last_confirmed_hit_time"] or old_time), 0, 0.5)
+
+                                    n += 1
+                                    candidates[n] = last_hit + drift
+                                end
+
+                                -- > tight jitter ring around the freshest real sight,
+                                -- catches half-body peeks the centroid rounds off
+
+                                if fresh_real then
+                                    local ring = {
+                                        vector3_new(1.5, 0.8, 0),
+                                        vector3_new(-1.5, 0.8, 0),
+                                        vector3_new(0, 0.8, 1.5),
+                                        vector3_new(0, 0.8, -1.5)
+                                    }
+
+                                    for r = 1, #ring do
+                                        n += 1
+                                        candidates[n] = fresh_real + ring[r]
+                                    end
+                                end
+                            end
+
+                            resolve_point = find_damage_position(candidates, parts, local_gun or 500, ragebot_hitbox) or led_pattern
+                        end
+
+                        ragebot_aim_position = resolve_point
                         target_velocity = vector3_zero
-
-                        -- > resolved position becomes the new truth, drop poisoned samples
-
                         target_velocity_history = {}
-                        target_last_position = highest_data["pos"]
+                        target_last_position = pattern
                         did_defensive = true
                         is_defensive = true
                     end
@@ -20468,7 +21421,22 @@ do
                                     end)
                                 end
 
-                                spawn(get_bullet_result, target[2], hitbox, origin, pos, target_velocity, did_defensive)
+                                -- > the target may have untargeted during the shot
+                                -- delay wait, never index it blind here
+
+                                if target then
+                                    local bullet_velocity = target_velocity
+
+                                    if not bullet_velocity or bullet_velocity.Magnitude < 0.1 then
+                                        local pattern_velocity = cluster_data["pattern_velocity"]
+
+                                        if pattern_velocity and pattern_velocity.Magnitude > 0.1 then
+                                            bullet_velocity = pattern_velocity
+                                        end
+                                    end
+
+                                    spawn(get_bullet_result, target[2], hitbox, origin, pos, bullet_velocity, did_defensive)
+                                end
 
                                 if shoot then
                                     getfenv(shoot)["require"] = nil
@@ -20518,8 +21486,15 @@ do
 
     force_aim_position = function(character, position, timer)
         if ragebot_target and character and ragebot_target[3] == character then
-            ragebot_force_position = position
-            defensive_positions = {}
+ragebot_force_position = position
+cluster_data["positions"] = {}
+cluster_data["pattern"] = nil
+cluster_data["last_real"] = nil
+cluster_data["last_real_time"] = nil
+cluster_data["pattern_velocity"] = nil
+cluster_data["pattern_accel"] = nil
+cluster_data["pattern_trust"] = 0.5
+cluster_data["desync_streak"] = 0
             delay(timer or local_ping/500, function()
                 ragebot_force_position = nil
             end)
@@ -20533,23 +21508,66 @@ do
     -- >> ( ragebot setting updaters )
 
     create_connection(menu_references["void_spam_resolver_position_weight"]["on_slider_change"], function(value)
-        void_spam_resolver_position_weight = value
+        -- > cluster radius, default trust 1.5 == 14.4 studs
+
+        cluster_forgiveness = value * 9.6
     end)
 
     create_connection(menu_references["void_spam_resolver_void_weight"]["on_slider_change"], function(value)
-        void_spam_resolver_void_weight = value
-    end)
-    
-    create_connection(menu_references["void_spam_resolver_accuracy"]["on_slider_change"], function(value)
-        void_spam_resolver_accuracy = 1 + (0.6525 * ((-50 + value)/50))
+        -- > out of void bonus, default trust 0.2 == 5 studs
+
+        cluster_void_bonus = value * 25
     end)
 
-    create_connection(menu_references["void_spam_resolver_lerp"]["on_slider_change"], function(value)
-        void_spam_resolver_lerp = value/100
+    create_connection(menu_references["void_spam_resolver_accuracy"]["on_slider_change"], function(value)
+        -- > min cluster size, default accuracy 76.82% == threshold 1.35 == 4 points
+
+        local threshold = 1 + (0.6525 * ((-50 + value)/50))
+
+        cluster_min_size = clamp(floor(threshold * 3 + 0.5), 3, 10)
     end)
-    
+
+    create_connection(menu_references["void_spam_resolver_forget_rate"]["on_slider_change"], function(value)
+        -- > distance penalty multiplier, default forget 80% == 2x
+
+        cluster_distance_penalty = value / 40
+    end)
+
+    -- > sync tunables straight from flags so loaded configs apply without touching sliders
+
+    do
+        local radius_value = flags["void_spam_resolver_position_weight"]
+
+        if radius_value then
+            cluster_forgiveness = radius_value * 9.6
+        end
+
+        local bonus_value = flags["void_spam_resolver_void_weight"]
+
+        if bonus_value then
+            cluster_void_bonus = bonus_value * 25
+        end
+
+        local penalty_value = flags["void_spam_resolver_forget_rate"]
+
+        if penalty_value then
+            cluster_distance_penalty = penalty_value / 40
+        end
+
+        local size_value = flags["void_spam_resolver_accuracy"]
+
+        if size_value then
+            local threshold = 1 + (0.6525 * ((-50 + size_value)/50))
+
+            cluster_min_size = clamp(floor(threshold * 3 + 0.5), 3, 10)
+        end
+    end
+
     create_connection(menu_references["auto_fire_defensive"]["on_toggle_change"], function(value)
-        defensive_positions = {}
+        cluster_data["positions"] = {}
+        cluster_data["pattern"] = nil
+        cluster_data["pattern_trust"] = 0.5
+        cluster_data["desync_streak"] = 0
     end)
 
     create_connection(menu_references["target_selection_notification"]["on_toggle_change"], function(value)
@@ -20588,9 +21606,12 @@ do
         local ragebot_ammo_connection = nil
         local ragebot_camera_connection = nil
 
-        create_connection(menu_references["ragebot_enabled"]["on_toggle_change"], LPH_JIT_MAX(function(value)
-            targets = {}
-            defensive_positions = {}
+            create_connection(menu_references["ragebot_enabled"]["on_toggle_change"], LPH_JIT_MAX(function(value)
+targets = {}
+cluster_data["positions"] = {}
+cluster_data["pattern"] = nil
+cluster_data["pattern_trust"] = 0.5
+cluster_data["desync_streak"] = 0
 
             if ragebot_target then
                 set_ragebot_target(nil, nil)
@@ -20819,7 +21840,7 @@ do
     create_connection(menu_references["ragebot_field_of_view_color"]["on_transparency_change"], function(value)
         local transparency = 1-value
         if fov_circle and flags["ragebot"] and not ragebot_target then
-            tween(fov_circle, {["Transparency"] = transparency}, circular, out, 0)
+            tween(fov_circle, {["Transparency"] = transparency}, circular, out, 0.09)
         end
     end)
 
@@ -20846,7 +21867,7 @@ do
     create_connection(menu_references["ragebot_field_of_view_active_color"]["on_transparency_change"], function(value)
         local transparency = 1-value
         if fov_circle and flags["ragebot"] and ragebot_target then
-            tween(fov_circle, {["Transparency"] = transparency}, circular, out, 0)
+            tween(fov_circle, {["Transparency"] = transparency}, circular, out, 0.09)
         end
     end)
 
@@ -20876,12 +21897,15 @@ do
 
         local follow_target_style = "random spam"
         local follow_target_avoid_last_tick = clock()
-        local distance = flags["follow_target_distance"]
         local speed = 75
         local height = vector3_zero
 
         local follow_target = LPH_JIT_MAX(function(dt, hrp, bypass)
             if ragebot_target and hrp and ((not in_void and not stomping and not purchasing) or bypass) and ragebot_aim_position and not ragebot_target[7] then
+                -- > read live, a load-time snapshot goes stale or nil and kills every style
+
+                local distance = flags["follow_target_distance"] or 8
+
                 if follow_target_stop_if_reloading and local_reloading then -- theres a reason for not using else ifs i think? i forget but im not risking it
                     local_following = false
                     return
@@ -20955,9 +21979,7 @@ do
             menu_references["follow_target_speed"]:set_visible(follow_target_style == "strafe")
         end)
 
-        create_connection(menu_references["follow_target_distance"]["on_slider_change"], function(value)
-            distance = value
-        end)
+        -- > follow distance slider needs no cache, the follower reads the flag live
 
         create_connection(menu_references["follow_target_speed"]["on_slider_change"], function(value)
             speed = value
@@ -21957,8 +22979,12 @@ do
                     local children = get_children(backpack)
                     children[#children+1] = local_tool
 
-                    for gun, data in local_guns do
-                        local parent = gun["Parent"]
+                    -- > no shadowing: this loop used to overwrite the weapon string
+                    -- with a tool instance, so every gun after the first just re-bought
+                    -- the first one's ammo instead of being purchased
+
+                    for handle, data in local_guns do
+                        local parent = handle["Parent"]
                         if parent then
                             children[#children+1] = parent
                         end
@@ -22080,6 +23106,7 @@ do
     -- >> ( auto stomp )
 
     do
+        auto_stomp_enabled = false
         local auto_stomp_offset = vector3_new(0,2.3,0)
         local auto_stomp_tick = clock()
         local last_position = nil
@@ -22161,6 +23188,7 @@ do
                 end
             end
             last_position = nil
+            auto_stomp_enabled = value and true or false
 
             if value then
                 anti_aim[#anti_aim+1] = do_auto_stomp
@@ -22223,27 +23251,29 @@ do
 
         -- > ( deep y state )
 
-        local deep_y_force_reloading = false
-        local deep_y_force_not_full_health = false
-        local deep_y_force_tabbed_out = false
-        local deep_y_disable_target_selected = false
-        local deep_y_disable_auto_stomping = false
-        local deep_y_disable_purchasing = false
-        local deep_y_disable_knocked = false
+        deep_y_force_reloading = false
+        deep_y_force_not_full_health = false
+        deep_y_force_tabbed_out = false
+        deep_y_disable_target_selected = false
+        deep_y_disable_auto_stomping = false
+        deep_y_disable_purchasing = false
+        deep_y_disable_knocked = false
 
         -- > ( random bait state )
 
-        local random_bait_force_reloading = false
-        local random_bait_force_tabbed_out = false
-        local random_bait_force_not_full_health = false
-        local random_bait_disable_target_selected = false
-        local random_bait_disable_following_target = false
-        local random_bait_disable_target_knocked = false
-        local random_bait_disable_purchasing = false
-        local random_bait_disable_auto_stomping = false
-        local random_bait_next_bait = 0
-        local random_bait_stage = false
-        local random_bait_cooldown = flags["random_bait_cooldown"] or 5
+        random_bait_force_reloading = false
+        random_bait_force_tabbed_out = false
+        random_bait_force_not_full_health = false
+        random_bait_disable_target_selected = false
+        random_bait_disable_following_target = false
+        random_bait_disable_target_knocked = false
+        random_bait_disable_purchasing = false
+        random_bait_disable_auto_stomping = false
+        random_bait_next_bait = 0
+        random_bait_stage = 0
+        random_bait_stage_until = 0
+        random_bait_corner = vector3_new()
+        random_bait_cooldown = flags["random_bait_cooldown"] or 5
 
 
         local isrbxactive = isrbxactive or LPH_NO_VIRTUALIZE(function() return true end)
@@ -22429,9 +23459,20 @@ do
         local do_void_hide = LPH_JIT_MAX(function(dt, hrp)
             local humanoid = local_parts["Humanoid"]
 
-            -- > purchasing needs clean frames (shop teleport + clickdetector), never fight it
+            -- > original behaviour: only the user's own force/disable switches
+            -- decide when void hide stands down. the old hardcoded gate killed
+            -- every blink whenever auto stomp was enabled or a follow was still
+            -- travelling, which made void hide look dead entirely.
+            -- purchasing stays a hard yield, the shop flow needs clean frames
 
-            if purchasing then
+            local forced = (void_hide_force_when_reloading and local_reloading) or (void_hide_force_when_tabbed_out and not isrbxactive()) or (void_hide_force_when_not_full_health and (humanoid and humanoid["Health"] ~= humanoid["MaxHealth"] or false))
+
+            if purchasing and not forced then
+                in_void = false
+                return
+            end
+
+            if not forced and ((void_hide_disable_when_forced_position and ragebot_force_position) or (void_hide_disable_when_target_selected and ragebot_target) or (void_hide_disable_when_target_knocked and (flags["ragebot"] and ragebot_target and ragebot_target[18])) or (void_hide_disable_when_following_target and local_following) or (void_hide_disable_when_purchasing and purchasing)) then
                 in_void = false
                 return
             end
@@ -22447,7 +23488,7 @@ do
                 if deep_y_disable_purchasing and purchasing then can_deep = false end
                 if deep_y_disable_knocked and local_knocked then can_deep = false end
 
-                local deep_forced = (deep_y_force_reloading and local_reloading) or (deep_y_force_not_full_health and (humanoid and humanoid["Health"] ~= humanoid["MaxHealth"] or false)) or (deep_y_force_tabbed_out and not isrbxactive())
+                local deep_forced = forced or (deep_y_force_reloading and local_reloading) or (deep_y_force_not_full_health and (humanoid and humanoid["Health"] ~= humanoid["MaxHealth"] or false)) or (deep_y_force_tabbed_out and not isrbxactive())
 
                 if deep_forced then
                     can_deep = true
@@ -22463,7 +23504,7 @@ do
                     render_stepped_wait(render_stepped)
                     hrp["CFrame"] = old_cframe
                     hrp["Velocity"] = old_velocity
-                    in_void = false
+
                 else
                     in_void = false
                 end
@@ -22484,7 +23525,7 @@ do
                 if random_bait_disable_purchasing and purchasing then can_bait = false end
                 if random_bait_disable_auto_stomping and stomping then can_bait = false end
 
-                local rb_forced = (random_bait_force_reloading and local_reloading) or (random_bait_force_tabbed_out and not isrbxactive()) or (random_bait_force_not_full_health and (humanoid and humanoid["Health"] ~= humanoid["MaxHealth"] or false))
+                local rb_forced = forced or (random_bait_force_reloading and local_reloading) or (random_bait_force_tabbed_out and not isrbxactive()) or (random_bait_force_not_full_health and (humanoid and humanoid["Health"] ~= humanoid["MaxHealth"] or false))
 
                 if rb_forced then
                     can_bait = true
@@ -22503,10 +23544,10 @@ do
                         if tick_rb - last > void_hide_void_time then
                             last = tick_rb
                             window_open = false
-                            in_void = false
+                            -- > keep in_void as-is: the heartbeat reset owns it,
+                            -- clearing it here ended the void window a frame early
                         elseif tick_rb - last < void_hide_teleport_time then
                             window_open = false
-                            in_void = false
                         else
                             in_void = true
                         end
@@ -22518,22 +23559,42 @@ do
                         local goal = nil
 
                         if tick_rb >= random_bait_next_bait then
-                            if not random_bait_stage then
-                                -- > bait: origin
+                            if random_bait_stage == 0 then
+                                -- > bait phase 1: flash on the origin long enough to be seen,
+                                -- random spin so the flash never reads as a fixed pose
 
-                                random_bait_stage = true
-                                random_bait_next_bait = tick_rb
-                                goal = cframe_new(0, 0, 0)
+                                random_bait_stage = 1
+                                random_bait_stage_until = tick_rb + 0.08
+
+                                goal = cframe_new(0, 0, 0) * cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
+                            elseif random_bait_stage == 1 then
+                                if tick_rb >= random_bait_stage_until then
+                                    -- > bait phase 2: hop to a RANDOM diagonal corner:
+                                    -- every axis independently +-1, all 8 combinations
+                                    -- (1,1,1 / -1,-1,-1 / 1,-1,1 / ...) equally likely
+
+                                    random_bait_stage = 2
+                                    random_bait_stage_until = tick_rb + 0.08
+
+                                    random_bait_corner = vector3_new(
+                                        math_random(0, 1) == 0 and 1 or -1,
+                                        math_random(0, 1) == 0 and 1 or -1,
+                                        math_random(0, 1) == 0 and 1 or -1
+                                    )
+                                end
+
+                                goal = cframe_new(random_bait_corner)
                             else
-                                -- > corner next to the bait spot, schedule the next one
+                                if tick_rb >= random_bait_stage_until then
+                                    -- > bait done, back to regular voiding until the next one
 
-                                random_bait_stage = false
-                                random_bait_next_bait = tick_rb + random_bait_cooldown
+                                    random_bait_stage = 0
+                                    random_bait_next_bait = tick_rb + random_bait_cooldown
 
-                                local cx = math_random(0, 1) == 0 and 1 or -1
-                                local cz = math_random(0, 1) == 0 and 1 or -1
-
-                                goal = cframe_new(cx, 1, cz)
+                                    goal = cframe_new(math_random(-2147483647, 2147483647), math_random(-400, 2147483647), math_random(-2147483647, 2147483647))
+                                else
+                                    goal = cframe_new(random_bait_corner)
+                                end
                             end
                         else
                             -- > regular random voiding between baits
@@ -22553,13 +23614,6 @@ do
                 end
 
                 return
-            end
-
-            local forced = (void_hide_force_when_reloading and local_reloading) or (void_hide_force_when_tabbed_out and not isrbxactive()) or (void_hide_force_when_not_full_health and (humanoid and humanoid["Health"] ~= humanoid["MaxHealth"] or false))
-            if not forced then
-                if (void_hide_disable_when_forced_position and ragebot_force_position) or (void_hide_disable_when_target_selected and ragebot_target) or (void_hide_disable_when_target_knocked and (flags["ragebot"] and ragebot_target and ragebot_target[18])) or (void_hide_disable_when_following_target and local_following) or (void_hide_disable_when_purchasing and purchasing) then
-                    return
-                end
             end
 
             if hrp and not ragebot_force_position then
@@ -22657,7 +23711,11 @@ do
                 render_stepped_wait(render_stepped)
                 hrp["CFrame"] = old_cframe
                 hrp["Velocity"] = old_velocity
-                in_void = false
+
+                -- > do NOT force in_void false here; the original leaves it set
+                -- until the next heartbeat resets it (in_void = nil), other
+                -- systems key off that window. forcing false every tick is
+                -- what broke void hide entirely
             else
                 in_void = false
             end
@@ -22737,6 +23795,14 @@ do
 
             if backpack and not purchasing and hrp and (not auto_equip_unequip_when_when_no_target or ragebot_target ~= nil) then
                 for name, gun in fake_local_guns do
+                    -- > destroyed tools keep a NULL parent with a locked Parent
+                    -- property, purge them instead of erroring every frame
+
+                    if gun["Parent"] == nil then
+                        fake_local_guns[name] = nil
+                        continue
+                    end
+
                     local is_gun = false
                     for i = 1, #auto_equip_guns do
                         if name == auto_equip_guns[i] then
@@ -24160,7 +25226,7 @@ do
     create_connection(menu_references["aim_assist_field_of_view_show_fov"]["on_transparency_change"], function(value)
         local transparency = 1-value
         if fov_circle and flags["aim_assist"] then
-            tween(fov_circle, {["Transparency"] = transparency}, circular, out, 0)
+            tween(fov_circle, {["Transparency"] = transparency}, circular, out, 0.09)
         end
     end)
 
@@ -24439,7 +25505,7 @@ do
 
     create_connection(menu_references["silent_aim_field_of_view_show_fov"]["on_transparency_change"], function(value)
         if fov_circle and flags["silent_aim"] then
-            tween(fov_circle, {["Transparency"] = 1-value}, circular, out, 0)
+            tween(fov_circle, {["Transparency"] = 1-value}, circular, out, 0.09)
         end
     end)
 
@@ -24451,7 +25517,7 @@ do
 
     create_connection(menu_references["silent_aim_field_of_view_outline"]["on_transparency_change"], function(value)
         if fov_circle_outline and flags["silent_aim"] then
-            tween(fov_circle_outline, {["Transparency"] = 1-value}, circular, out, 0)
+            tween(fov_circle_outline, {["Transparency"] = 1-value}, circular, out, 0.09)
         end
     end)
 
@@ -25138,10 +26204,15 @@ do
 
     local update_server_position = LPH_NO_VIRTUALIZE(function(hrp)
 
-        -- > never sample the character while it is voided, keep the last real position
+        -- > the replicated view includes void frames, that is literally what the
+        -- server sees, while the resolver-facing server position stays clean
 
-        if hrp and in_void == false then
-            local_server_position = hrp["CFrame"]
+        if hrp then
+            local_replicated_position = hrp["CFrame"]
+
+            if in_void == false then
+                local_server_position = hrp["CFrame"]
+            end
         end
     end)
 
