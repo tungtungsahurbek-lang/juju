@@ -1794,8 +1794,25 @@ local create_click_connection = function(new_handle, object, callback)
     local open_settings = function(settings)
         local border = settings["border"]
         for _, element in settings["elements"] do
-            for _, drawing in element["drawings"] do
-                tween(drawing, _ == "slider_fill" and half_transparency or _ == "slider_line" and half_transparency or _ == "checkmark" and (flags[element["toggle_flag"]] and half_transparency or hide_transparency) or _ == "colorpicker_transparency" and {Transparency = -flags[element["transparency_flag"]]+1} or show_transparency, exponential, out, 0.18)
+            for drawing_name, drawing in element["drawings"] do
+                -- > same explicit targeting as pop_menu: the checkmark mirrors
+                -- > the live flag, nil flags can no longer pick a wrong branch
+
+                local target
+
+                if drawing_name == "slider_fill" or drawing_name == "slider_line" then
+                    target = half_transparency
+                elseif drawing_name == "checkmark" then
+                    local toggle_flag = element["toggle_flag"]
+                    target = (toggle_flag and flags[toggle_flag]) and half_transparency or hide_transparency
+                elseif drawing_name == "colorpicker_transparency" then
+                    local transparency_flag = element["transparency_flag"]
+                    target = {Transparency = -((transparency_flag and flags[transparency_flag]) or 0) + 1}
+                else
+                    target = show_transparency
+                end
+
+                tween(drawing, target, exponential, out, 0.18)
             end
         end
 
@@ -3799,8 +3816,35 @@ local create_click_connection = function(new_handle, object, callback)
                         end
 
                         for _, element in section["elements"] do
-                            for _, drawing in element["drawings"] do
-                                tween(drawing, _ == "slider_fill" and half_transparency or _ == "slider_line" and half_transparency or _ == "checkmark" and (flags[element["toggle_flag"]] and half_transparency or hide_transparency) or _ == "colorpicker_transparency" and (menu_open and {Transparency = -flags[element["transparency_flag"]]+1} or transparency) or transparency, exponential, out, 0.18)
+                            for drawing_name, drawing in element["drawings"] do
+                                -- > explicit per-drawing targets instead of one
+                                -- > and/or chain: the old single expression flipped
+                                -- > meaning with menu_open through the shadowed
+                                -- > half_transparency local, so any element whose
+                                -- > flag lookup misfired silently took the wrong
+                                -- > branch and its checkmark stayed hidden after a
+                                -- > close/reopen. every target is now derived from
+                                -- > the live state and nil-safe
+
+                                local target
+
+                                if drawing_name == "slider_fill" or drawing_name == "slider_line" then
+                                    target = half_transparency
+                                elseif drawing_name == "checkmark" then
+                                    -- > the checkmark must always mirror the LIVE
+                                    -- > flag on reopen, never whatever transparency
+                                    -- > it kept from the previous close
+
+                                    local toggle_flag = element["toggle_flag"]
+                                    target = (toggle_flag and flags[toggle_flag]) and half_transparency or hide_transparency
+                                elseif drawing_name == "colorpicker_transparency" then
+                                    local transparency_flag = element["transparency_flag"]
+                                    target = menu_open and {Transparency = -((transparency_flag and flags[transparency_flag]) or 0) + 1} or transparency
+                                else
+                                    target = transparency
+                                end
+
+                                tween(drawing, target, exponential, out, 0.18)
                             end
                         end
                     end
@@ -17362,8 +17406,20 @@ local do_esp = LPH_NO_VIRTUALIZE(function()
             local status = data[1]
             local tool = data[13]
 
+            -- > kill the previous icon first: blindly overwriting data[5][9]
+            -- orphans the old native drawing, it keeps rendering at its last
+            -- position forever and no hide loop can ever reach it again
+
+            local drawings = data[5]
+            local old_icon = drawings[9]
+
+            if old_icon then
+                old_icon:Destroy()
+                drawings[9] = nil
+            end
+
             local image = (tool and tool_icon_data and tool_icon_data[tool["Name"]]) or ""
-            data[5][9] = create_fake_drawing("Image", {
+            drawings[9] = create_fake_drawing("Image", {
                 Color = colors[status][9],
                 Transparency = transparencies[status][9],
                 Data = image,
@@ -17376,8 +17432,20 @@ local do_esp = LPH_NO_VIRTUALIZE(function()
             local status = data[1]
             local tool = data[13]
 
+            -- > kill the previous icon first: blindly overwriting data[5][9]
+            -- orphans the old native drawing, it keeps rendering at its last
+            -- position forever and no hide loop can ever reach it again
+
+            local drawings = data[5]
+            local old_icon = drawings[9]
+
+            if old_icon then
+                old_icon:Destroy()
+                drawings[9] = nil
+            end
+
             local image = (tool and tool_icon_data and tool_icon_data[tool["Name"]]) or ""
-            data[5][9] = create_real_drawing("Image", {
+            drawings[9] = create_real_drawing("Image", {
                 Color = colors[status][9],
                 Transparency = transparencies[status][9],
                 Data = image,
@@ -17395,6 +17463,11 @@ local do_esp = LPH_NO_VIRTUALIZE(function()
         local icon = data[2] and data[5][9]
 
         if not icon then
+            -- > no icon yet (late joiner or toggle race): build it once instead
+            -- of dropping the equip event, create_tool_icon destroys any
+            -- previous drawing so this can never stack a second one
+
+            create_tool_icon(data)
             return
         end
 
@@ -18018,7 +18091,12 @@ local do_esp = LPH_NO_VIRTUALIZE(function()
                 end
 
                 if do_tool_icon then
-                    tool_icon_player_tool_equipped_connection = create_connection(signals["on_player_tool_equipped"], create_tool_icon)
+                    -- > update, never re-create: re-creating on every equip
+                    -- overwrote data[5][9] and orphaned the previous native
+                    -- drawing, leaving icons stuck on screen through camera
+                    -- moves and weapon swaps
+
+                    tool_icon_player_tool_equipped_connection = create_connection(signals["on_player_tool_equipped"], update_tool_icon)
                 end
 
                 if do_armor_bar then
@@ -20775,8 +20853,10 @@ do
     -- mirrors the exact ShootGun payload the fire loop builds: same base origin,
     -- same forced spread offset on X, so a candidate only counts when the real
     -- remote packet would land its server ray on the target hitbox.
-    -- direct hitbox contact outranks a merely unobstructed path, samples ring
-    -- the sent position to absorb hitbox width and spread jitter
+    -- two phases keep it smart and cheap: one exact-packet probe per candidate
+    -- ranks the whole field first, ring samples are then spent only on the
+    -- survivors to absorb hitbox width and spread jitter, and ties are broken
+    -- by proximity to the pattern's own prediction so the aim stays coherent
 
     local damage_params = RaycastParams["new"]()
     damage_params["FilterType"] = Enum["RaycastFilterType"]["Exclude"]
@@ -20817,7 +20897,7 @@ do
         vector3_new(-1.7, 1.7, 0)
     }
 
-    local find_damage_position = LPH_NO_VIRTUALIZE(function(candidates, target_parts, max_range, target_hitbox_name)
+    local find_damage_position = LPH_NO_VIRTUALIZE(function(candidates, target_parts, max_range, target_hitbox_name, preferred)
         -- > same base origin the fire loop sends, minus its random jitter
 
         local origin = local_server_position["p"] + vector3_new(0.004, 3.0208, -0.048)
@@ -20825,74 +20905,134 @@ do
         local best_point = nil
         local best_score = -1
         local unobstructed = nil
-        local probe_budget = 32
+
+        -- > phase one: a single exact-packet probe per candidate. the remote
+        -- fires one ray at candidate + spread, so this is the only probe that
+        -- truly proves the packet damages, and it ranks the entire field
+        -- before a single ring sample is spent
+
+        local ranked = {}
+        local ranked_count = 0
 
         for i = 1, #candidates do
             local candidate_position = candidates[i]
 
             if candidate_position then
-                -- > validate what the remote will actually receive, spread included
-
                 local sent_position = candidate_position + fire_spread_offset
-                local direct_hit = nil
-                local candidate_unobstructed = nil
+                local direction = sent_position - origin
+                local distance = direction["Magnitude"]
 
-                for s = 1, #damage_hit_samples do
-                    local probe = sent_position + damage_hit_samples[s]
-                    local direction = probe - origin
-                    local distance = direction["Magnitude"]
+                if distance > 0 and distance <= max_range then
+                    local ok, result = pcall(damage_raycast, workspace, origin, direction, damage_params)
 
-                    if distance <= max_range then
-                        probe_budget -= 1
+                    if ok and result then
+                        local node = result["Instance"]
 
-                        local ok, result = pcall(damage_raycast, workspace, origin, direction, damage_params)
+                        while node do
+                            if node == target_parts then
+                                -- > head contact outranks torso contact outranks
+                                -- merely touching the character
 
-                        if ok and result then
-                            local node = result["Instance"]
+                                local hit_name = node["Name"]
+                                local hit_rank = hit_name == "Head" and 3 or hit_name == target_hitbox_name and 2.5 or 1
 
-                            while node do
-                                if node == target_parts then
-                                    -- > head contact outranks torso contact outranks
-                                    -- merely touching the character
+                                if hit_rank >= 2.5 then
+                                    -- > the exact packet lands on the wanted hitbox,
+                                    -- nothing listed after it can outrank that
 
-                                    local hit_name = node["Name"]
-                                    local hit_rank = hit_name == "Head" and 3 or hit_name == target_hitbox_name and 2.5 or 1
-
-                                    if not direct_hit or hit_rank > direct_hit[2] then
-                                        direct_hit = {candidate_position, hit_rank}
-                                    end
-
-                                    break
+                                    return candidate_position
                                 end
 
-                                node = node["Parent"]
-                            end
-                        elseif ok and not result and not candidate_unobstructed then
-                            candidate_unobstructed = candidate_position
-                        end
-                    end
+                                ranked_count += 1
+                                ranked[ranked_count] = {candidate_position, hit_rank, sent_position}
 
-                    if probe_budget <= 0 then
-                        break
+                                break
+                            end
+
+                            node = node["Parent"]
+                        end
+                    elseif ok and not result then
+                        -- > clear line but no contact, ring samples may still clip
+                        -- the hitbox beside the sent position, keep it queued
+
+                        if not unobstructed then
+                            unobstructed = candidate_position
+                        end
+
+                        ranked_count += 1
+                        ranked[ranked_count] = {candidate_position, 0, sent_position}
                     end
                 end
+            end
+        end
 
-                if direct_hit then
-                    if direct_hit[2] >= 2.5 then
-                        return direct_hit[1]
-                    end
+        -- > phase two: ring samples around the survivors only, absorbing
+        -- hitbox width and spread jitter without paying for the losers.
+        -- sample one is the zero offset, phase one already spent it
 
-                    if direct_hit[2] > best_score then
-                        best_score = direct_hit[2]
-                        best_point = direct_hit[1]
+        local probe_budget = 24
+
+        for i = 1, ranked_count do
+            local entry = ranked[i]
+            local candidate_position = entry[1]
+            local hit_rank = entry[2]
+            local sent_position = entry[3]
+
+            for s = 2, #damage_hit_samples do
+                local probe = sent_position + damage_hit_samples[s]
+                local direction = probe - origin
+                local distance = direction["Magnitude"]
+
+                if distance > 0 and distance <= max_range then
+                    probe_budget -= 1
+
+                    local ok, result = pcall(damage_raycast, workspace, origin, direction, damage_params)
+
+                    if ok and result then
+                        local node = result["Instance"]
+
+                        while node do
+                            if node == target_parts then
+                                local hit_name = node["Name"]
+                                local ring_rank = hit_name == "Head" and 3 or hit_name == target_hitbox_name and 2.5 or 1
+
+                                if ring_rank > hit_rank then
+                                    hit_rank = ring_rank
+                                end
+
+                                break
+                            end
+
+                            node = node["Parent"]
+                        end
                     end
-                elseif candidate_unobstructed and not unobstructed then
-                    unobstructed = candidate_unobstructed
                 end
 
                 if probe_budget <= 0 then
                     break
                 end
+            end
+
+            if hit_rank > 0 then
+                -- > rank separates the tiers, bounded proximity to the preferred
+                -- resolve point breaks ties inside one tier so the aim stays
+                -- coherent with the pattern's own motion instead of jumping at
+                -- whichever body-touching point happened to order first
+
+                local score = hit_rank * 100
+
+                if preferred then
+                    score -= clamp((candidate_position - preferred)["Magnitude"], 0, 60) * 1.5
+                end
+
+                if score > best_score then
+                    best_score = score
+                    best_point = candidate_position
+                end
+            end
+
+            if probe_budget <= 0 then
+                break
             end
         end
 
@@ -21229,9 +21369,9 @@ do
 
                         -- > search for the position the Shoot remote actually damages:
                         -- freshest real sight first, then the led centroid, then the
-                        -- raw pattern, finally a stale sight led by velocity when the
-                        -- target is near-still. only a point whose mirrored packet ray
-                        -- touches the hitbox wins, wall bang skips the check entirely
+                        -- raw pattern, the live hitbox and its head anchor, and the
+                        -- confirmed-damage memory. only a point whose mirrored packet
+                        -- ray touches the hitbox wins, wall bang skips the check entirely
 
                         local resolve_point = nil
                         local hitbox_voided = hitbox_position.Magnitude >= 9e5
@@ -21248,6 +21388,8 @@ do
                             local fresh_real = cluster_data["last_real"]
                             local real_age = old_time - (cluster_data["last_real_time"] or 9e9)
                             local live_velocity = target_velocity or vector3_zero
+                            local last_hit = cluster_data["last_confirmed_hit"]
+                            local last_hit_age = last_hit and (old_time - (cluster_data["last_confirmed_hit_time"] or 9e9)) or 9e9
 
                             if fresh_real and real_age < 0.15 then
                                 n += 1
@@ -21275,17 +21417,24 @@ do
                                 n += 1
                                 candidates[n] = hitbox_position + live_velocity * clamp(local_ping / 2000, 0, 0.25)
 
+                                -- > live head anchor, head damage outranks everything
+                                -- and it doubles as a second real observation whenever
+                                -- the chosen hitbox itself is the desynced part
+
+                                local head_anchor = parts["Head"]
+
+                                if head_anchor and head_anchor["Position"]["Magnitude"] < 9e5 then
+                                    n += 1
+                                    candidates[n] = head_anchor["Position"] + live_velocity * clamp(local_ping / 2000, 0, 0.25)
+                                end
+
                                 -- > confirmed-damage memory: the resolver feedback loop
                                 -- remembers where shots actually landed damage; a new
                                 -- resolve near that anchor is far likelier to be right
 
-                                local last_hit = cluster_data["last_confirmed_hit"]
-
-                                if last_hit and old_time - (cluster_data["last_confirmed_hit_time"] or 9e9) < 1.2 then
-                                    local drift = live_velocity * clamp(old_time - (cluster_data["last_confirmed_hit_time"] or old_time), 0, 0.5)
-
+                                if last_hit and last_hit_age < 1.2 then
                                     n += 1
-                                    candidates[n] = last_hit + drift
+                                    candidates[n] = last_hit + live_velocity * clamp(last_hit_age, 0, 0.5)
                                 end
 
                                 -- > tight jitter ring around the freshest real sight,
@@ -21306,7 +21455,31 @@ do
                                 end
                             end
 
-                            resolve_point = find_damage_position(candidates, parts, local_gun or 500, ragebot_hitbox) or led_pattern
+                            local searched = find_damage_position(candidates, parts, local_gun or 500, ragebot_hitbox, led_pattern)
+
+                            if searched then
+                                resolve_point = searched
+                            else
+                                -- > nothing in the pattern's whole region can take a
+                                -- packet, the cluster is chasing a decoy. demote its
+                                -- trust (rate limited, one bad frame must not gut it)
+                                -- and rescan urgently while the confirmed-damage
+                                -- anchor or the freshest real sight holds the aim
+
+                                if old_time - (cluster_data["last_damage_search_fail"] or 0) > 0.15 then
+                                    cluster_data["last_damage_search_fail"] = old_time
+                                    cluster_data["pattern_trust"] = clamp((cluster_data["pattern_trust"] or 0.5) - 0.08, 0, 1)
+                                    cluster_data["urgent_until"] = old_time + 0.25
+                                end
+
+                                if last_hit and last_hit_age < 1.2 then
+                                    resolve_point = last_hit + live_velocity * clamp(last_hit_age, 0, 0.5)
+                                elseif fresh_real then
+                                    resolve_point = fresh_real
+                                else
+                                    resolve_point = led_pattern
+                                end
+                            end
                         end
 
                         ragebot_aim_position = resolve_point
@@ -21897,16 +22070,23 @@ cluster_data["desync_streak"] = 0
 
         local follow_target_style = "random spam"
         local follow_target_avoid_last_tick = clock()
+        local follow_target_last_hop = 0
+        local follow_target_hop_offset = nil
         local speed = 75
         local height = vector3_zero
 
         local follow_target = LPH_JIT_MAX(function(dt, hrp, bypass)
-            if ragebot_target and hrp and ((not in_void and not stomping and not purchasing) or bypass) and ragebot_aim_position and not ragebot_target[7] then
-                -- > read live, a load-time snapshot goes stale or nil and kills every style
+            -- > hard gate on self knocked: dragging a knocked body to the
+            -- enemy is a free stomp for them, nothing user-configurable
 
-                local distance = flags["follow_target_distance"] or 8
+            if ragebot_target and hrp and ((not in_void and not stomping and not purchasing) or bypass) and ragebot_aim_position and not ragebot_target[7] and not local_knocked then
+                -- > read live, a load-time snapshot goes stale or nil and kills every style.
+                -- > math.random rejects floats, sliders must never feed it raw
 
-                if follow_target_stop_if_reloading and local_reloading then -- theres a reason for not using else ifs i think? i forget but im not risking it
+                local distance = floor(flags["follow_target_distance"] or 8)
+                local vertical = clamp(distance * 0.35, 2, 30)
+
+                if follow_target_stop_if_reloading and local_reloading then
                     local_following = false
                     return
                 elseif follow_target_stop_if_target_knocked and ragebot_target[18] then
@@ -21917,27 +22097,65 @@ cluster_data["desync_streak"] = 0
                     return
                 end
 
+                -- > the aim point is normally the perfect anchor, it already
+                -- > carries the resolve and the prediction. but a forced
+                -- > position or a stale decoy resolve can park it absurdly
+                -- > far from the target's real body - following it would fling
+                -- > us across the map. fall back to the live torso whenever it
+                -- > is real and the anchor has drifted off it, a voided torso
+                -- > keeps the resolved anchor
+
+                local anchor = ragebot_aim_position
+                local target_parts = ragebot_target[4]
+                local target_torso = target_parts and target_parts["HumanoidRootPart"]
+
+                if target_torso then
+                    local torso_position = target_torso["Position"]
+
+                    if torso_position["Magnitude"] < 9e5 and (anchor - torso_position)["Magnitude"] > 50 then
+                        anchor = torso_position
+                    end
+                end
+
                 local old_cframe = hrp["CFrame"]
                 local new_cframe = old_cframe
 
                 if follow_target_style == "random" then
-                    new_cframe = cframe_new(ragebot_aim_position + vector3_new(math_random(-distance, distance), math_random(-distance, distance), math_random(-distance, distance)))
+                    -- > one offset per hop window instead of a full re-roll
+                    -- > every frame: the teleport reads as a strafing player
+                    -- > instead of a blur, and the server still replicates a
+                    -- > fresh spot every window
+
+                    local tick = clock()
+
+                    if tick - follow_target_last_hop > 0.08 or not follow_target_hop_offset then
+                        follow_target_last_hop = tick
+                        follow_target_hop_offset = vector3_new(math_random(-distance, distance), math_random(-vertical, vertical), math_random(-distance, distance))
+                    end
+
+                    new_cframe = cframe_new(anchor + follow_target_hop_offset)
                     new_cframe*=cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
                 elseif follow_target_style == "random spam" then
                     local tick = clock()
                     local difference = tick - follow_target_avoid_last_tick
                     local old_difference = difference < 0.06
                     if difference > 0.11 or old_difference then
-                        new_cframe = cframe_new(ragebot_aim_position + vector3_new(math_random(-distance, distance), math_random(-distance, distance), math_random(-distance, distance)))
+                        -- > re-roll only at cycle start so the whole visible
+                        -- > window shows one solid position, the void frames
+                        -- > between cycles still fully desync
+
                         if not old_difference then
                             follow_target_avoid_last_tick = tick
+                            follow_target_hop_offset = vector3_new(math_random(-distance, distance), math_random(-vertical, vertical), math_random(-distance, distance))
                         end
+
+                        new_cframe = cframe_new(anchor + follow_target_hop_offset)
                     else
                         new_cframe = cframe_new(math_random(-2147483647, 2147483647), math_random(-400, 2147483647), math_random(-2147483647, 2147483647))
                     end
                     new_cframe*=cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
                 else
-                    new_cframe = cframe_angles(0,rad(360 * ((clock() * speed) % 1)),0) * cframe_new(0,0,distance) + (ragebot_aim_position + height)
+                    new_cframe = cframe_angles(0,rad(360 * ((clock() * speed) % 1)),0) * cframe_new(0,0,distance) + (anchor + height)
                 end
 
                 local_following = true
@@ -23237,7 +23455,12 @@ cluster_data["desync_streak"] = 0
 
         local void_hide_teleport_time = flags["void_hide_teleport_time"]
         local void_hide_void_time = flags["void_hide_void_time"]
-        local void_hide_offset = flags["void_hide_offset"]
+
+        -- > the offset slider has no default, an untouched flag reads nil here
+        -- > and math_random(-nil, nil) would kill every void tick. floor it,
+        -- > math.random rejects floats
+
+        local void_hide_offset = floor(flags["void_hide_offset"] or 0)
         local void_hide_disable_when_purchasing = false
         local void_hide_disable_when_target_selected = false
         local void_hide_disable_when_following_target = true
@@ -23283,7 +23506,7 @@ cluster_data["desync_streak"] = 0
         end)
 
         create_connection(menu_references["void_hide_offset"]["on_slider_change"], function(value)
-            void_hide_offset = value
+            void_hide_offset = floor(value or 0)
         end)
 
         create_connection(menu_references["void_hide_void_time"]["on_slider_change"], function(value)
@@ -23583,7 +23806,12 @@ cluster_data["desync_streak"] = 0
                                     )
                                 end
 
-                                goal = cframe_new(random_bait_corner)
+                                -- > the old code jumped straight to the corner here, so
+                                -- > the origin flash lasted a single frame and the bait
+                                -- > was effectively invisible. hold the origin for the
+                                -- > whole stage window, then the corner takes over
+
+                                goal = random_bait_stage == 1 and cframe_new(0, 0, 0) * cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359))) or cframe_new(random_bait_corner)
                             else
                                 if tick_rb >= random_bait_stage_until then
                                     -- > bait done, back to regular voiding until the next one
@@ -23621,24 +23849,38 @@ cluster_data["desync_streak"] = 0
                 local old_velocity = hrp["Velocity"]
                 in_void = true
                 local tick = clock()
-                local do_void_hide = not ragebot_force_position or math_random(1,10) == 1
                 if flags["void_hide_exploit"] and (not flags["void_hide_stop_if_forced"] or not forced) then
                     if tick - last > void_hide_void_time then
                         last = tick
                         in_void = false
                     elseif tick - last < void_hide_teleport_time then
                         in_void = false
-                    elseif do_void_hide then
+                    else
+                        -- > the old shadowed local was always true here, the
+                        -- > enclosing branch already guarantees no forced
+                        -- > position, so the 1-in-10 roll was unreachable
+
                         in_void = true
                         local fake_in_void = true
                         if void_hide_type == "bait" then
-                            local bait_range = flags["void_hide_bait_distance"]
+                            local bait_range = floor(flags["void_hide_bait_distance"] or 250)
                             local difference = tick - last_bait
-                            if difference > 0.5 then
+
+                            -- > honour the bait cooldown slider here too, the
+                            -- > hardcoded 0.5 made it do nothing in spam mode
+
+                            if difference > (flags["void_hide_bait_cooldown"] or 0.5) then
                                 last_bait = tick
                                 bait_position = cframe_new(vector3_new(math_random(-bait_range, bait_range), math_random(-200, 200), math_random(-bait_range, bait_range)))
                             elseif difference < flags["void_hide_bait_time"] and bait_position then
+                                -- > actually flash AT the bait spot: the old code only
+                                -- > skipped the void cframe here, which left the body
+                                -- > standing at its real position - the opposite of a
+                                -- > bait. in_void stays true so the server snapshot
+                                -- > keeps the real position frozen
+
                                 fake_in_void = false
+                                hrp["CFrame"] = bait_position + vector3_new(math_random(-void_hide_offset, void_hide_offset), math_random(-void_hide_offset, void_hide_offset), math_random(-void_hide_offset, void_hide_offset))
                             else
                                 fake_in_void = true
                             end
@@ -23666,11 +23908,15 @@ cluster_data["desync_streak"] = 0
                             hrp["CFrame"] = ((void_hide_type == "vc server" and cframe_new(vector3_new(0, math_random(-2147483647, 2147483647), 0)) or cframe_new(vector3_new(math_random(-2147483647, 2147483647), math_random(-400, 2147483647), math_random(-2147483647, 2147483647)))) + vector3_new(math_random(-void_hide_offset, void_hide_offset), math_random(-void_hide_offset, void_hide_offset), math_random(-void_hide_offset, void_hide_offset)))*cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359)))
                         end
                     end
-                elseif do_void_hide then
+                else
+                    -- > plain voiding, no spam pattern. the old shadowed local
+                    -- > was always true here, the elseif was just an else in
+                    -- > disguise
+
                     in_void = true
                     local fake_in_void = true
                     if void_hide_type == "bait" then
-                        local bait_range = flags["void_hide_bait_distance"]
+                        local bait_range = floor(flags["void_hide_bait_distance"] or 250)
                         local difference = tick - last_bait
                         if difference > flags["void_hide_bait_cooldown"] then
                             last_bait = tick
@@ -23678,26 +23924,11 @@ cluster_data["desync_streak"] = 0
                         elseif difference < flags["void_hide_bait_time"] and bait_position then
                             fake_in_void = false
                             hrp["CFrame"] = bait_position + vector3_new(math_random(-void_hide_offset, void_hide_offset), math_random(-void_hide_offset, void_hide_offset), math_random(-void_hide_offset, void_hide_offset))
-                        elseif void_hide_type == "meta" then
-                            fake_in_void = false
-                            local diff = tick - last_meta_switch
-                            if diff > 0.2 then
-                                if diff > 0.35 then
-                                    last_meta_switch = tick
-                                end
-                                if diff < 0.21 then
-                                    diff = 0.21
-                                    new_cframe = new_cframe - vector3_new(0, 30, 0)
-                                end
-                                hrp["CFrame"] = new_cframe
-                            else
-                                if tick - last_meta_switch2 > 0.09 then
-                                    last_meta_switch2 = tick
-                                    new_cframe = cframe_new(offsets[math_random(1,#offsets)]*cframe_angles(rad(math_random(1,359)), rad(math_random(1,359)), rad(math_random(1,359))))
-                                end
-                                hrp["CFrame"] = new_cframe
-                            end
                         else
+                            -- > the old meta stage machine was nested inside the
+                            -- > bait branch where its type check could never pass,
+                            -- > unreachable dead code, removed
+
                             fake_in_void = true
                         end
                     end
